@@ -63,10 +63,14 @@ defmodule TimingPlayTime.PlayBalance do
       iex> PlayBalance.today_activity_minutes(activity)
       {:ok, %{minutes: 27.5, play_minutes: 41.25}}
   """
-  def today_activity_minutes(activity, now \\ DateTime.utc_now()) do
+  def today_activity_minutes(
+        activity,
+        now \\ DateTime.utc_now(),
+        get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
+      ) do
     from = later(activity.activated_at, LocalDay.start_of_today(now))
 
-    with {:ok, minutes} <- @time_source.get_elapsed_minutes(activity, from: from, to: now) do
+    with {:ok, minutes} <- get_elapsed_minutes.(activity, from: from, to: now) do
       {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
     end
   end

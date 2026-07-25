@@ -42,8 +42,8 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
 
     arguments = %{
       "projects" => [activity.time_source_identifier],
-      "start_date_min" => DateTime.to_iso8601(from),
-      "start_date_max" => DateTime.to_iso8601(to)
+      "start_date_min" => iso8601_no_microseconds(from),
+      "start_date_max" => iso8601_no_microseconds(to)
     }
 
     Logger.info(
@@ -137,6 +137,14 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
 
   defp default_from(%DateTime{} = activated_at) do
     DateTime.new!(DateTime.to_date(activated_at), ~T[00:00:00], activated_at.time_zone)
+  end
+
+  # Timing's MCP docs require dates "without microseconds" (e.g.
+  # "2019-01-01T00:00:00+00:00"); DateTime.utc_now()'s default microsecond
+  # precision violates that, which a narrow same-day range is more exposed to
+  # than the wide since-activation range (silently filtered to no matches).
+  defp iso8601_no_microseconds(datetime) do
+    datetime |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   end
 
   defp api_key do
