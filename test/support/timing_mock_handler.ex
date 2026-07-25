@@ -17,7 +17,15 @@ defmodule TimingPlayTime.Support.TimingMockHandler do
       true ->
         %{
           "content" => [
-            %{"type" => "text", "text" => Jason.encode!(%{"data" => state[:entries] || []})}
+            %{
+              "type" => "text",
+              "text" =>
+                Jason.encode!(%{
+                  "time_entries" => state[:entries] || [],
+                  "projects" => [],
+                  "teams" => []
+                })
+            }
           ]
         }
     end
