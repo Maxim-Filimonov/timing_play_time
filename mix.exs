@@ -59,7 +59,8 @@ defmodule TimingPlayTime.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:ex_mcp, "~> 1.0.0-rc.4"}
+      {:ex_mcp, "~> 1.0.0-rc.4"},
+      {:castore, "~> 1.0"}
     ]
   end
 

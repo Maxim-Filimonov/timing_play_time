@@ -20,6 +20,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
       transport: :http,
       url: @mcp_url,
       auth_provider: {ExMCP.Authorization.Provider.Static, token: api_key()},
+      security: %{tls: %{cacerts: castore_cacerts()}},
       name: __MODULE__
     )
   end
@@ -75,5 +76,16 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   defp api_key do
     Application.get_env(:timing_play_time, __MODULE__, [])
     |> Keyword.fetch!(:api_key)
+  end
+
+  # ExMCP's HTTP transport defaults to `:public_key.cacerts_get/0` for the CA
+  # bundle, which relies on the OS exposing its trust store to the BEAM in a
+  # way it doesn't always do (yields `cacerts: :undefined`, an invalid :ssl
+  # option combo). Loading castore's bundled CAs sidesteps the OS lookup.
+  defp castore_cacerts do
+    CAStore.file_path()
+    |> File.read!()
+    |> :public_key.pem_decode()
+    |> Enum.map(fn {:Certificate, der, _} -> der end)
   end
 end
