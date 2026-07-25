@@ -1,8 +1,12 @@
 import Config
 
-# Domain tests are fast and DB-free against the Stub adapter; the persistence
-# contract-test suite exercises Sqlite directly regardless of this default.
-config :timing_play_time, persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub
+# Domain tests are fast and DB-free/network-free against the Stub adapters; the
+# persistence contract-test suite exercises Sqlite directly, and the Timing
+# adapter is exercised directly against ExMCP's test transport, regardless of
+# these defaults.
+config :timing_play_time,
+  persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub,
+  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub
 
 # Configure your database
 #

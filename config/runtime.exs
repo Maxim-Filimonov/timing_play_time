@@ -20,6 +20,21 @@ if System.get_env("PHX_SERVER") do
   config :timing_play_time, TimingPlayTimeWeb.Endpoint, server: true
 end
 
+# Unlike DATABASE_PATH below, this isn't gated to :prod: the Timing adapter
+# is the compile-time default in every env (config/config.exs), so dev needs
+# a real key too. Only :test opts back out, via its Stub override.
+unless config_env() == :test do
+  timing_api_key =
+    System.get_env("TIMING_API_KEY") ||
+      raise """
+      environment variable TIMING_API_KEY is missing.
+      Generate a personal API key in Timing's web app (API Keys section) and set:
+          export TIMING_API_KEY=...
+      """
+
+  config :timing_play_time, TimingPlayTime.Plugins.TimeSource.Timing, api_key: timing_api_key
+end
+
 if config_env() == :prod do
   database_path =
     System.get_env("DATABASE_PATH") ||

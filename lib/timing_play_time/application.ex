@@ -8,10 +8,12 @@ defmodule TimingPlayTime.Application do
   @impl true
   def start(_type, _args) do
     persistence_adapter = Application.fetch_env!(:timing_play_time, :persistence_adapter)
+    time_source_adapter = Application.fetch_env!(:timing_play_time, :time_source_adapter)
 
     children =
       [TimingPlayTimeWeb.Telemetry] ++
-        persistence_adapter_children(persistence_adapter) ++
+        supervised_adapter_children(persistence_adapter) ++
+        supervised_adapter_children(time_source_adapter) ++
         [
           TimingPlayTime.Repo,
           {Ecto.Migrator,
@@ -40,10 +42,11 @@ defmodule TimingPlayTime.Application do
     :ok
   end
 
-  # Not every persistence adapter needs a supervised process (e.g. Sqlite is a
+  # Not every plug-in adapter needs a supervised process (e.g. Sqlite is a
   # stateless wrapper around the already-supervised Repo); only start one when
-  # the adapter actually implements start_link/1 (as the ETS-backed Stub does).
-  defp persistence_adapter_children(adapter) do
+  # the adapter actually implements start_link/1 (as the ETS-backed Persistence
+  # Stub and the ExMCP-backed Timing adapter do).
+  defp supervised_adapter_children(adapter) do
     if Code.ensure_loaded?(adapter) and function_exported?(adapter, :start_link, 1) do
       [{adapter, []}]
     else

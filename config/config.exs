@@ -11,7 +11,15 @@ config :timing_play_time,
   ecto_repos: [TimingPlayTime.Repo],
   generators: [timestamp_type: :utc_datetime],
   persistence_adapter: TimingPlayTime.Plugins.Persistence.Sqlite,
-  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub
+  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Timing
+
+# ExMCP requires explicit user consent before an HTTP client talks to an
+# external origin. This app's Timing integration is authorized out-of-band by
+# the operator supplying TIMING_API_KEY, not by an interactive per-request
+# approval, so web.timingapp.com is marked trusted alongside ExMCP's
+# localhost defaults (which this config, since it's provided, must repeat).
+config :ex_mcp, :security,
+  trusted_origins: ["localhost", "127.0.0.1", "::1", "web.timingapp.com"]
 
 # Configures the endpoint
 config :timing_play_time, TimingPlayTimeWeb.Endpoint,
