@@ -25,12 +25,10 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
 
   @impl true
   def get_activity(id) do
-    case Repo.get(Activity, id) do
-      nil -> {:error, :not_found}
-      activity -> {:ok, activity_to_map(activity)}
+    case fetch_activity(id) do
+      {:ok, activity} -> {:ok, activity_to_map(activity)}
+      {:error, :not_found} -> {:error, :not_found}
     end
-  rescue
-    Ecto.Query.CastError -> {:error, :not_found}
   end
 
   @impl true
@@ -43,28 +41,24 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
 
   @impl true
   def update_activity(id, attrs) do
-    case Repo.get(Activity, id) do
-      nil ->
+    case fetch_activity(id) do
+      {:error, :not_found} ->
         {:error, :not_found}
 
-      activity ->
+      {:ok, activity} ->
         activity
         |> Activity.changeset(attrs)
         |> Repo.update()
         |> to_result(&activity_to_map/1)
     end
-  rescue
-    Ecto.Query.CastError -> {:error, :not_found}
   end
 
   @impl true
   def delete_activity(id) do
-    case Repo.get(Activity, id) do
-      nil -> :ok
-      activity -> with {:ok, _} <- Repo.delete(activity), do: :ok
+    case fetch_activity(id) do
+      {:error, :not_found} -> :ok
+      {:ok, activity} -> with {:ok, _} <- Repo.delete(activity), do: :ok
     end
-  rescue
-    Ecto.Query.CastError -> :ok
   end
 
   @impl true
@@ -87,10 +81,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
     %ManualSync{}
     |> ManualSync.changeset(%{minutes: minutes})
     |> Repo.insert()
-    |> case do
-      {:ok, %ManualSync{minutes: minutes}} -> {:ok, minutes}
-      {:error, changeset} -> {:error, changeset}
-    end
+    |> to_result(fn %ManualSync{minutes: minutes} -> minutes end)
   end
 
   @impl true
@@ -114,6 +105,15 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
   end
 
   # Private
+
+  defp fetch_activity(id) do
+    case Repo.get(Activity, id) do
+      nil -> {:error, :not_found}
+      activity -> {:ok, activity}
+    end
+  rescue
+    Ecto.Query.CastError -> {:error, :not_found}
+  end
 
   defp to_result({:ok, record}, mapper), do: {:ok, mapper.(record)}
   defp to_result({:error, changeset}, _mapper), do: {:error, changeset}
