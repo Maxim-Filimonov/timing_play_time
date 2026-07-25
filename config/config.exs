@@ -10,7 +10,7 @@ import Config
 config :timing_play_time,
   ecto_repos: [TimingPlayTime.Repo],
   generators: [timestamp_type: :utc_datetime],
-  persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub,
+  persistence_adapter: TimingPlayTime.Plugins.Persistence.Sqlite,
   time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub
 
 # Configures the endpoint

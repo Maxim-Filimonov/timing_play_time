@@ -1,5 +1,9 @@
 import Config
 
+# Domain tests are fast and DB-free against the Stub adapter; the persistence
+# contract-test suite exercises Sqlite directly regardless of this default.
+config :timing_play_time, persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
