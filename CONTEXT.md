@@ -5,20 +5,20 @@ Converts real-world time spent on worthwhile activities (tracked in the Timing a
 ## Language
 
 **Activity**:
-A category of task that earns Play Minutes when time is logged against it. Maps 1:1 to a Timing Project by name/ID, and carries a Multiplier and an Activated At timestamp (only Timing entries on that Project from that moment onward count).
+A category of task that earns Play Minutes when time is logged against it. Maps 1:1 to a Timing Project by name/ID, and carries a Multiplier and an Activated At timestamp (only Timing entries on that Project from the beginning of that timestamp's calendar day onward count).
 _Avoid_: Task, Chore, Project (Project is Timing's term for the underlying tracked entity; Activity is this app's wrapper around it with a multiplier attached)
 
 **Multiplier**:
 A decimal factor (may be below or above 1) attached to an Activity, applied to minutes spent to compute Play Minutes earned. Configured per Activity in the persistence backend, not hardcoded.
 
 **Play Minutes**:
-The unit of earned play time. Computed from Activities (minutes spent × Multiplier) or reported directly via a Manual Sync.
+The unit of earned play time. Computed from Activities (minutes spent × Multiplier) or reported directly via a Manual Sync. Also shown per-Activity scoped to just today (the local calendar day, per [ADR-0005](docs/adr/0005-local-timezone-for-day-boundaries.md)) alongside the raw Timing minutes it was computed from — a live day-scoped view of the same computation as the Timing-Derived Earned Total, not a separate stored figure.
 
 **Timing-Derived Earned Total**:
-The live-computed sum of (entry duration × Multiplier) across every Timing entry on each Activity's mapped Project, counting only entries from that Activity's Activated At timestamp onward. Recomputed fresh each time the balance is shown — not a stored ledger, so editing an old Timing entry or changing an Activity's Multiplier changes this total retroactively.
+The live-computed sum of (entry duration × Multiplier) across every Timing entry on each Activity's mapped Project, counting only entries from the beginning of the calendar day (UTC) containing that Activity's Activated At timestamp onward — so an Activity activated mid-day still earns for time already logged earlier that same day. Recomputed fresh each time the balance is shown — not a stored ledger, so editing an old Timing entry or changing an Activity's Multiplier changes this total retroactively.
 
 **Manual Sync**:
-An absolute total of Play Minutes, entered by hand from an external source (currently an iOS exercise app with its own timer). Each sync overwrites the previous Manual Sync value — it does not add to it.
+An absolute total of Play Minutes, entered by hand from an external source (currently an iOS exercise app with its own timer). Each sync overwrites the previous Manual Sync value — it does not add to it. Displayed to the user as "Exercise Minutes" in the UI — "sync" is developer jargon; the underlying replace-not-add semantics are unchanged, only the label differs.
 _Avoid_: Sync delta, sync amount (it's a replace, not an increment)
 
 **Playtime Used**:
