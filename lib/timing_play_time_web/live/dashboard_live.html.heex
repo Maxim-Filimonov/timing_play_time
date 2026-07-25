@@ -1,0 +1,199 @@
+<Layouts.app flash={@flash}>
+  <div class="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50 px-4 py-8">
+    <div class="mx-auto max-w-4xl space-y-8">
+      <%!-- Play Balance Hero Section --%>
+      <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-600 via-purple-700 to-indigo-800 p-8 text-white shadow-2xl">
+        <div class="relative z-10">
+          <h1 class="text-4xl font-bold mb-2">Your Play Balance</h1>
+          <p class="text-purple-200 mb-6">Time you've earned to spend on fun!</p>
+
+          <div class="flex items-baseline gap-3 mb-6">
+            <span class="text-7xl font-black">{Float.round(@balance.total, 1)}</span>
+            <span class="text-3xl font-semibold text-purple-200">minutes</span>
+          </div>
+
+          <%!-- Progress Bar --%>
+          <div class="relative h-6 bg-purple-900/40 rounded-full overflow-hidden mb-8 backdrop-blur-sm">
+            <div
+              class={"absolute inset-y-0 left-0 rounded-full transition-all duration-1000 ease-out #{balance_gradient(@balance)}"}
+              style={"width: #{balance_percentage(@balance)}%"}
+            >
+              <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
+            </div>
+          </div>
+
+          <%!-- Balance Breakdown --%>
+          <div class="grid grid-cols-3 gap-4 text-sm">
+            <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div class="text-purple-200 mb-1">Earned (Timing)</div>
+              <div class="text-2xl font-bold">
+                {Float.round(@balance.timing_derived_total, 1)}
+              </div>
+            </div>
+            <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div class="text-purple-200 mb-1">Manual Sync</div>
+              <div class="text-2xl font-bold">{Float.round(@balance.manual_sync_total, 1)}</div>
+            </div>
+            <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+              <div class="text-purple-200 mb-1">Used</div>
+              <div class="text-2xl font-bold text-red-300">
+                {Float.round(@balance.playtime_used_total, 1)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Decorative Elements --%>
+        <div class="absolute -top-20 -right-20 size-64 bg-purple-500/30 rounded-full blur-3xl">
+        </div>
+        <div class="absolute -bottom-20 -left-20 size-64 bg-indigo-500/30 rounded-full blur-3xl">
+        </div>
+      </div>
+
+      <%!-- Quick Actions --%>
+      <div class="grid md:grid-cols-2 gap-6">
+        <%!-- Log Playtime Used --%>
+        <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-orange-200">
+          <h2 class="text-2xl font-bold text-gray-900 mb-4">🎮 Log Playtime</h2>
+          <p class="text-gray-600 mb-4 text-sm">
+            Used some playtime gaming or relaxing? Log it here!
+          </p>
+
+          <form phx-submit="log_playtime" class="space-y-4">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">Minutes Used</label>
+              <input
+                type="number"
+                name="minutes"
+                step="0.1"
+                min="0"
+                placeholder="30.0"
+                class="w-full px-4 py-3 rounded-xl border-2 border-orange-300 focus:border-orange-500 focus:ring focus:ring-orange-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-orange-50"
+                required
+              />
+            </div>
+            <button
+              type="submit"
+              class="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold py-3 px-6 rounded-xl hover:from-orange-600 hover:to-red-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+            >
+              Log Playtime
+            </button>
+          </form>
+        </div>
+
+        <%!-- Manual Sync --%>
+        <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-green-200">
+          <h2 class="text-2xl font-bold text-gray-900 mb-4">🏃 Manual Sync</h2>
+          <p class="text-gray-600 mb-4 text-sm">
+            Update your exercise minutes from external apps
+          </p>
+
+          <form phx-submit="set_manual_sync" class="space-y-4">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">Total Minutes</label>
+              <input
+                type="number"
+                name="minutes"
+                step="0.1"
+                min="0"
+                placeholder="150.0"
+                value={@balance.manual_sync_total}
+                class="w-full px-4 py-3 rounded-xl border-2 border-green-300 focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-green-50"
+                required
+              />
+            </div>
+            <button
+              type="submit"
+              class="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white font-bold py-3 px-6 rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+            >
+              Update Sync
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <%!-- Configure Activities --%>
+      <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-pink-200">
+        <h2 class="text-2xl font-bold text-gray-900 mb-4">⚙️ Add an Activity</h2>
+
+        <form phx-submit="create_activity" class="grid md:grid-cols-4 gap-4 items-end">
+          <div class="md:col-span-1">
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Name</label>
+            <input
+              type="text"
+              name="name"
+              placeholder="Coding"
+              class="w-full px-4 py-3 rounded-xl border-2 border-pink-300 focus:border-pink-500 focus:ring focus:ring-pink-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-pink-50"
+              required
+            />
+          </div>
+          <div class="md:col-span-1">
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Timing Project</label>
+            <input
+              type="text"
+              name="time_source_identifier"
+              placeholder="coding-project"
+              class="w-full px-4 py-3 rounded-xl border-2 border-pink-300 focus:border-pink-500 focus:ring focus:ring-pink-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-pink-50"
+              required
+            />
+          </div>
+          <div class="md:col-span-1">
+            <label class="block text-sm font-semibold text-gray-700 mb-2">Multiplier</label>
+            <input
+              type="number"
+              name="multiplier"
+              step="0.1"
+              placeholder="1.0"
+              class="w-full px-4 py-3 rounded-xl border-2 border-pink-300 focus:border-pink-500 focus:ring focus:ring-pink-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-pink-50"
+              required
+            />
+          </div>
+          <div class="md:col-span-1">
+            <button
+              type="submit"
+              class="w-full bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold py-3 px-6 rounded-xl hover:from-pink-600 hover:to-purple-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+            >
+              Add Activity
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <%!-- Activities List --%>
+      <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-purple-200">
+        <h2 class="text-2xl font-bold text-gray-900 mb-6">🎯 Your Activities</h2>
+
+        <%= if @activities == [] do %>
+          <div class="text-center py-12 text-gray-500">
+            <div class="text-6xl mb-4">🌟</div>
+            <p class="text-lg">No activities yet!</p>
+            <p class="text-sm mt-2">Activities will earn you play minutes based on time spent.</p>
+          </div>
+        <% else %>
+          <div class="space-y-4">
+            <%= for activity <- @activities do %>
+              <div class="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200">
+                <div class="flex-1">
+                  <div class="font-bold text-gray-900 text-lg">{activity.name}</div>
+                  <div class="text-sm text-gray-600">
+                    Multiplier:
+                    <span class="font-semibold text-purple-600">{activity.multiplier}×</span>
+                    · Source:
+                    <span class="font-mono text-xs text-gray-500">
+                      {activity.time_source_identifier}
+                    </span>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <div class="px-4 py-2 bg-purple-600 text-white rounded-lg font-bold text-sm">
+                    Active
+                  </div>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  </div>
+</Layouts.app>

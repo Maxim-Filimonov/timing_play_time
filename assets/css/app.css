@@ -1,0 +1,120 @@
+@import "tailwindcss" source(none);
+@source "../css";
+@source "../js";
+@source "../../lib/timing_play_time_web";
+
+@plugin "../vendor/heroicons";
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+/* Gamified Light Theme */
+@plugin "../vendor/daisyui-theme" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+
+  /* Base colors - bright and playful */
+  --color-base-100: oklch(98% 0 0);
+  --color-base-200: oklch(96% 0.01 300);
+  --color-base-300: oklch(94% 0.02 300);
+  --color-base-content: oklch(20% 0.05 285);
+
+  /* Primary - Vibrant Purple */
+  --color-primary: oklch(60% 0.25 285);
+  --color-primary-content: oklch(100% 0 0);
+
+  /* Secondary - Playful Pink */
+  --color-secondary: oklch(70% 0.2 350);
+  --color-secondary-content: oklch(100% 0 0);
+
+  /* Accent - Bright Orange */
+  --color-accent: oklch(70% 0.18 50);
+  --color-accent-content: oklch(100% 0 0);
+
+  /* Success - Vibrant Green */
+  --color-success: oklch(65% 0.2 145);
+  --color-success-content: oklch(100% 0 0);
+
+  /* Warning - Sunny Yellow */
+  --color-warning: oklch(75% 0.15 85);
+  --color-warning-content: oklch(20% 0.05 85);
+
+  /* Error - Bold Red */
+  --color-error: oklch(60% 0.22 25);
+  --color-error-content: oklch(100% 0 0);
+
+  /* Info - Sky Blue */
+  --color-info: oklch(70% 0.15 230);
+  --color-info-content: oklch(100% 0 0);
+
+  /* Neutral */
+  --color-neutral: oklch(30% 0.02 285);
+  --color-neutral-content: oklch(98% 0 0);
+
+  /* Rounded corners for playful feel */
+  --rounded-box: 1.5rem;
+  --rounded-btn: 1rem;
+  --rounded-badge: 1rem;
+
+  /* Animations */
+  --animation-btn: 0.2s;
+  --animation-input: 0.2s;
+
+  /* Border width */
+  --border-btn: 2px;
+
+  /* Focus ring */
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+}
+
+/* Custom animations for gamification */
+@keyframes pulse-glow {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Apply slide-in animation to cards */
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+/* Smooth transitions for interactive elements */
+button,
+a,
+input,
+select,
+textarea {
+  transition: all 0.2s ease;
+}
+
+/* Custom gradient backgrounds */
+.bg-gradient-purple {
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+}
+
+.bg-gradient-green {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.bg-gradient-orange {
+  background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+}
