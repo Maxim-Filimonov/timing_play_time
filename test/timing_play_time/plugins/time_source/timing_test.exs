@@ -7,7 +7,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
 
   @activity %{
     time_source_identifier: "coding-proj-1",
-    activated_at: ~U[2026-07-01 00:00:00Z]
+    activated_at: ~U[2026-07-01 14:32:07Z]
   }
 
   describe "get_elapsed_minutes/2" do
@@ -42,7 +42,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
       )
     end
 
-    test "defaults :from to the activity's activated_at" do
+    test "defaults :from to the beginning of the day the activity was activated" do
       MockServer.with_server(
         [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
         fn client ->
@@ -50,7 +50,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
           assert minutes == 0.0
 
           assert_receive {:call_tool, "list_time_entries", arguments}
-          assert arguments["start_date_min"] == DateTime.to_iso8601(@activity.activated_at)
+          assert arguments["start_date_min"] == "2026-07-01T00:00:00Z"
         end
       )
     end

@@ -37,7 +37,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   @impl true
   def get_elapsed_minutes(activity, opts \\ []) do
     client = Keyword.get(opts, :client, __MODULE__)
-    from = Keyword.get(opts, :from, activity.activated_at || DateTime.utc_now())
+    from = Keyword.get(opts, :from, default_from(activity.activated_at))
     to = Keyword.get(opts, :to, DateTime.utc_now())
 
     arguments = %{
@@ -129,6 +129,15 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
 
   defp duration_seconds(%{"duration" => duration}) when is_number(duration), do: duration
   defp duration_seconds(_), do: 0
+
+  # Cutoff for entries defaults to the beginning of the day the Activity was
+  # activated, not the exact activation instant, so an Activity created mid-day
+  # still counts time already logged earlier that same day.
+  defp default_from(nil), do: DateTime.utc_now()
+
+  defp default_from(%DateTime{} = activated_at) do
+    DateTime.new!(DateTime.to_date(activated_at), ~T[00:00:00], activated_at.time_zone)
+  end
 
   defp api_key do
     Application.get_env(:timing_play_time, __MODULE__, [])
