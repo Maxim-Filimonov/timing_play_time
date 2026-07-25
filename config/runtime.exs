@@ -33,6 +33,19 @@ unless config_env() == :test do
       """
 
   config :timing_play_time, TimingPlayTime.Plugins.TimeSource.Timing, api_key: timing_api_key
+
+  # Required so local-day-scoped figures (e.g. today's per-Activity minutes)
+  # use the operator's actual calendar day rather than UTC's (ADR-0005). No
+  # default: a silent UTC fallback would reproduce the bug this exists to fix.
+  local_timezone =
+    System.get_env("TZ") ||
+      raise """
+      environment variable TZ is missing.
+      Set it to your IANA timezone name, e.g.:
+          export TZ=Pacific/Auckland
+      """
+
+  config :timing_play_time, :local_timezone, local_timezone
 end
 
 if config_env() == :prod do

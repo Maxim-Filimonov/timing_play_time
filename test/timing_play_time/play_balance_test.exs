@@ -102,4 +102,50 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert_in_delta balance.total, -30.0, 0.1
     end
   end
+
+  describe "today_activity_minutes/2" do
+    setup do
+      :ok = PersistenceStub.clear_all_state()
+      %{}
+    end
+
+    test "clamps to the local start-of-day when the activity was activated on an earlier day" do
+      {:ok, activity} =
+        PersistenceStub.create_activity(%{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 2.0,
+          activated_at: ~U[2026-07-20 00:00:00Z]
+        })
+
+      # Local (Pacific/Auckland, NZST/UTC+12) start of today is 2026-07-24T12:00:00Z;
+      # `now` is 22h later, so elapsed today = 22/24 days.
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:ok, %{minutes: minutes, play_minutes: play_minutes}} =
+               PlayBalance.today_activity_minutes(activity, now)
+
+      assert_in_delta minutes, 45.0 * (22 / 24), 0.01
+      assert_in_delta play_minutes, minutes * 2.0, 0.001
+    end
+
+    test "clamps to activated_at when the activity was activated later today" do
+      {:ok, activity} =
+        PersistenceStub.create_activity(%{
+          name: "Learning",
+          time_source_identifier: "learning-proj-1",
+          multiplier: 1.0,
+          # After local start-of-today (2026-07-24T12:00:00Z) but before `now`.
+          activated_at: ~U[2026-07-25 01:00:00Z]
+        })
+
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:ok, %{minutes: minutes, play_minutes: play_minutes}} =
+               PlayBalance.today_activity_minutes(activity, now)
+
+      assert_in_delta minutes, 42.0 * (9 / 24), 0.01
+      assert_in_delta play_minutes, minutes, 0.001
+    end
+  end
 end

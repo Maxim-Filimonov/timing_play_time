@@ -13,6 +13,10 @@ config :timing_play_time,
   persistence_adapter: TimingPlayTime.Plugins.Persistence.Sqlite,
   time_source_adapter: TimingPlayTime.Plugins.TimeSource.Timing
 
+# Named IANA zones (e.g. "Pacific/Auckland") need a real tz database — Elixir's
+# default Calendar.UTCOnlyTimeZoneDatabase only resolves "Etc/UTC" (ADR-0005).
+config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
+
 # ExMCP requires explicit user consent before an HTTP client talks to an
 # external origin. This app's Timing integration is authorized out-of-band by
 # the operator supplying TIMING_API_KEY, not by an interactive per-request

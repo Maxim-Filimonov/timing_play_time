@@ -15,8 +15,9 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
     from = Keyword.get(opts, :from, activity.activated_at || DateTime.utc_now())
     to = Keyword.get(opts, :to, DateTime.utc_now())
 
-    # Calculate days since activation for simulation
-    days_active = DateTime.diff(to, from, :day)
+    # Fractional days elapsed in the queried range, so sub-day ranges (e.g.
+    # "today so far") simulate proportional minutes instead of always zero.
+    days_active = DateTime.diff(to, from, :second) / 86_400
 
     # Simulate time entries based on project ID pattern
     base_minutes =

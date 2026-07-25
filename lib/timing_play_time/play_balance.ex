@@ -10,6 +10,8 @@ defmodule TimingPlayTime.PlayBalance do
   - Playtime Used Total: Sum of all logged playtime usage
   """
 
+  alias TimingPlayTime.LocalDay
+
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
   @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
@@ -45,6 +47,32 @@ defmodule TimingPlayTime.PlayBalance do
 
       {:ok, balance}
     end
+  end
+
+  @doc """
+  Computes an Activity's raw Timing minutes and Play Minutes for just today
+  (the local calendar day, per ADR-0005), for the dashboard's per-Activity
+  breakdown.
+
+  `from` is the later of the local start-of-day and the Activity's
+  Activated At, so an Activity activated later today only counts from
+  activation onward.
+
+  ## Examples
+
+      iex> PlayBalance.today_activity_minutes(activity)
+      {:ok, %{minutes: 27.5, play_minutes: 41.25}}
+  """
+  def today_activity_minutes(activity, now \\ DateTime.utc_now()) do
+    from = later(activity.activated_at, LocalDay.start_of_today(now))
+
+    with {:ok, minutes} <- @time_source.get_elapsed_minutes(activity, from: from, to: now) do
+      {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
+    end
+  end
+
+  defp later(a, b) do
+    if DateTime.compare(a, b) == :gt, do: a, else: b
   end
 
   # Private functions

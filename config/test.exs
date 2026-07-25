@@ -6,7 +6,8 @@ import Config
 # these defaults.
 config :timing_play_time,
   persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub,
-  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub
+  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub,
+  local_timezone: "Pacific/Auckland"
 
 # Configure your database
 #

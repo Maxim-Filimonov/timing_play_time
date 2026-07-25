@@ -13,5 +13,5 @@ Every day-boundary calculation in the domain today is UTC (e.g. Timing-Derived E
 ## Consequences
 
 - This is the first local-time concept in an otherwise UTC-only domain model. Existing UTC-based day boundaries (e.g. Timing-Derived Earned Total's since-Activated-At boundary) are unaffected and remain UTC unless separately revisited.
-- New dependency: `tzdata`.
+- New dependency: `tzdata`, which by default periodically checks IANA for new tz-database releases over HTTPS (via `hackney`) so DST rule changes stay current without a redeploy; this can be disabled with `config :tzdata, :autoupdate, :disabled` if that outbound traffic is undesired.
 - New required env var, `TZ`, alongside the existing `TIMING_API_KEY` — both must be documented in the README.

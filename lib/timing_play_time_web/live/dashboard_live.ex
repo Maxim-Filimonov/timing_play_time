@@ -60,7 +60,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
         socket =
           socket
           |> load_balance()
-          |> put_flash(:info, "Manual sync set to #{minutes} minutes!")
+          |> put_flash(:info, "Exercise minutes set to #{minutes} minutes!")
 
         {:noreply, socket}
 
@@ -116,10 +116,17 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   defp load_activities(socket) do
     case ActivityManager.list_activities() do
       {:ok, activities} ->
-        assign(socket, :activities, activities)
+        assign(socket, :activities, Enum.map(activities, &with_today_minutes/1))
 
       {:error, _reason} ->
         assign(socket, :activities, [])
+    end
+  end
+
+  defp with_today_minutes(activity) do
+    case PlayBalance.today_activity_minutes(activity) do
+      {:ok, today} -> Map.merge(activity, today)
+      {:error, _reason} -> Map.merge(activity, %{minutes: 0.0, play_minutes: 0.0})
     end
   end
 
