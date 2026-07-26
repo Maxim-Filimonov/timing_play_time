@@ -82,24 +82,20 @@ defmodule TimingPlayTime.PlayBalance do
   # Private functions
 
   defp compute_timing_derived_total do
-    case @persistence.list_activities() do
-      {:ok, activities} ->
-        total =
-          Enum.reduce(activities, 0.0, fn activity, acc ->
-            case @time_source.get_elapsed_minutes(activity) do
-              {:ok, minutes} ->
-                acc + minutes * activity.multiplier
+    with {:ok, activities} <- @persistence.list_activities() do
+      total =
+        Enum.reduce(activities, 0.0, fn activity, acc ->
+          case @time_source.get_elapsed_minutes(activity) do
+            {:ok, minutes} ->
+              acc + minutes * activity.multiplier
 
-              {:error, _reason} ->
-                # Skip activities that fail to retrieve time
-                acc
-            end
-          end)
+            {:error, _reason} ->
+              # Skip activities that fail to retrieve time
+              acc
+          end
+        end)
 
-        {:ok, total}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, total}
     end
   end
 
