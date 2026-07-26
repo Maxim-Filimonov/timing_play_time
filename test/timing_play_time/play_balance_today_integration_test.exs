@@ -1,6 +1,6 @@
 defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
   @moduledoc """
-  Exercises `PlayBalance.today_activity_minutes/3` against the *real*
+  Exercises `PlayBalance.today_activity_minutes/4` against the *real*
   `TimingPlayTime.Plugins.TimeSource.Timing` adapter (via ExMCP's test
   transport), not `TimeSource.Stub`.
 
@@ -20,7 +20,9 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
   alias TimingPlayTime.Plugins.TimeSource.Timing
   alias TimingPlayTime.Support.TimingMockHandler
 
-  describe "today_activity_minutes/3 with the real Timing adapter" do
+  describe "today_activity_minutes/4 with the real Timing adapter" do
+    @user %{timezone: "Pacific/Auckland"}
+
     test "counts only today's entries, excluding an entry from yesterday" do
       activity = %{
         activated_at: ~U[2026-07-20 00:00:00Z],
@@ -29,8 +31,7 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
       }
 
       # `now` is 2026-07-26T05:00:00Z = 2026-07-26T17:00:00+12:00 in
-      # Pacific/Auckland (NZST, test.exs config) — local start of today is
-      # 2026-07-25T12:00:00Z.
+      # Pacific/Auckland — local start of today is 2026-07-25T12:00:00Z.
       now = ~U[2026-07-26 05:00:00Z]
 
       entries = [
@@ -46,7 +47,7 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
           get_elapsed_minutes = fn a, opts -> Timing.get_elapsed_minutes(a, opts ++ [client: client]) end
 
           assert {:ok, %{minutes: 60.0, play_minutes: 90.0}} =
-                   PlayBalance.today_activity_minutes(activity, now, get_elapsed_minutes)
+                   PlayBalance.today_activity_minutes(activity, @user, now, get_elapsed_minutes)
         end
       )
     end
@@ -76,7 +77,7 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
           get_elapsed_minutes = fn a, opts -> Timing.get_elapsed_minutes(a, opts ++ [client: client]) end
 
           assert {:ok, %{minutes: 30.0, play_minutes: 60.0}} =
-                   PlayBalance.today_activity_minutes(activity, now, get_elapsed_minutes)
+                   PlayBalance.today_activity_minutes(activity, @user, now, get_elapsed_minutes)
         end
       )
     end

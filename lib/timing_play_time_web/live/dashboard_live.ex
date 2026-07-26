@@ -5,16 +5,29 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   alias TimingPlayTime.ActivityManager
   alias TimingPlayTime.ManualSync
   alias TimingPlayTime.PlaytimeUsed
+  alias TimingPlayTime.Accounts
+
+  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
+
+  # Keeps the dashboard live-updating while the tab is open, without a
+  # background job queue (ADR-0007) — data goes stale again once the tab
+  # closes, which is fine since nobody's looking at it then.
+  @refresh_interval_ms :timer.seconds(60)
 
   @impl true
   def mount(_params, _session, socket) do
+    user = socket.assigns.current_user
+
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(TimingPlayTime.PubSub, "play_balance")
+      Phoenix.PubSub.subscribe(TimingPlayTime.PubSub, balance_topic(user))
+      Process.send_after(self(), :refresh, @refresh_interval_ms)
     end
 
     socket =
       socket
       |> assign(:page_title, "Dashboard")
+      |> assign(:client, nil)
+      |> open_time_source_connection()
       |> load_balance()
       |> load_activities()
 
@@ -22,16 +35,27 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   end
 
   @impl true
+  def handle_event("detected_timezone", %{"timezone" => timezone}, socket) do
+    socket =
+      if socket.assigns.current_user.timezone do
+        socket
+      else
+        case Accounts.update_timezone(socket.assigns.current_user, timezone) do
+          {:ok, user} -> socket |> assign(:current_user, user) |> load_activities()
+          {:error, _changeset} -> socket
+        end
+      end
+
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_event("log_playtime", %{"minutes" => minutes_str}, socket) do
     case Float.parse(minutes_str) do
       {minutes, _} when minutes > 0 ->
-        {:ok, _usage} = PlaytimeUsed.log_usage(minutes)
+        {:ok, _usage} = PlaytimeUsed.log_usage(socket.assigns.current_user.id, minutes)
 
-        Phoenix.PubSub.broadcast(
-          TimingPlayTime.PubSub,
-          "play_balance",
-          {:balance_updated, %{}}
-        )
+        broadcast_balance_updated(socket.assigns.current_user)
 
         socket =
           socket
@@ -49,13 +73,9 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   def handle_event("set_manual_sync", %{"minutes" => minutes_str}, socket) do
     case Float.parse(minutes_str) do
       {minutes, _} when minutes >= 0 ->
-        {:ok, _total} = ManualSync.set_total(minutes)
+        {:ok, _total} = ManualSync.set_total(socket.assigns.current_user.id, minutes)
 
-        Phoenix.PubSub.broadcast(
-          TimingPlayTime.PubSub,
-          "play_balance",
-          {:balance_updated, %{}}
-        )
+        broadcast_balance_updated(socket.assigns.current_user)
 
         socket =
           socket
@@ -77,7 +97,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       ) do
     with {multiplier, _} <- Float.parse(multiplier_str),
          {:ok, _activity} <-
-           ActivityManager.create_activity(%{
+           ActivityManager.create_activity(socket.assigns.current_user.id, %{
              name: name,
              time_source_identifier: time_source_identifier,
              multiplier: multiplier
@@ -98,8 +118,51 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     {:noreply, load_balance(socket)}
   end
 
+  @impl true
+  def handle_info(:refresh, socket) do
+    Process.send_after(self(), :refresh, @refresh_interval_ms)
+
+    socket =
+      socket
+      |> load_balance()
+      |> load_activities()
+
+    {:noreply, socket}
+  end
+
+  defp balance_topic(user), do: "play_balance:#{user.id}"
+
+  defp broadcast_balance_updated(user) do
+    Phoenix.PubSub.broadcast(TimingPlayTime.PubSub, balance_topic(user), {:balance_updated, %{}})
+  end
+
+  # Opens one connection for the lifetime of this LiveView process (ADR-0007)
+  # — reused across every `@refresh_interval_ms` tick, torn down automatically
+  # (it's linked to `self()`) when the LiveView terminates. Only meaningful
+  # once connected (the initial static render has no business making an
+  # external call), and only if the user has a configured Integration.
+  defp open_time_source_connection(socket) do
+    if connected?(socket) do
+      case Accounts.get_integration(socket.assigns.current_user) do
+        nil ->
+          socket
+
+        integration ->
+          case @time_source.connect(integration.credentials) do
+            {:ok, client} -> assign(socket, :client, client)
+            {:error, _reason} -> socket
+          end
+      end
+    else
+      socket
+    end
+  end
+
   defp load_balance(socket) do
-    case PlayBalance.compute() do
+    user = socket.assigns.current_user
+    time_source_opts = client_opts(socket)
+
+    case PlayBalance.compute(user, time_source_opts) do
       {:ok, balance} ->
         assign(socket, :balance, balance)
 
@@ -114,19 +177,40 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   end
 
   defp load_activities(socket) do
-    case ActivityManager.list_activities() do
+    user = socket.assigns.current_user
+
+    case ActivityManager.list_activities(user.id) do
       {:ok, activities} ->
-        assign(socket, :activities, Enum.map(activities, &with_today_minutes/1))
+        assign(socket, :activities, Enum.map(activities, &with_today_minutes(&1, socket)))
 
       {:error, _reason} ->
         assign(socket, :activities, [])
     end
   end
 
-  defp with_today_minutes(activity) do
-    case PlayBalance.today_activity_minutes(activity) do
+  # Briefly nil on a brand-new anonymous user, until the `.TimezoneDetector`
+  # hook's first pushEvent lands (ADR-0006) — shows zero rather than
+  # crashing on a missing time zone.
+  defp with_today_minutes(activity, %{assigns: %{current_user: %{timezone: nil}}}) do
+    Map.merge(activity, %{minutes: 0.0, play_minutes: 0.0})
+  end
+
+  defp with_today_minutes(activity, socket) do
+    user = socket.assigns.current_user
+    time_source_opts = client_opts(socket)
+
+    get_elapsed_minutes = fn a, opts -> @time_source.get_elapsed_minutes(a, opts ++ time_source_opts) end
+
+    case PlayBalance.today_activity_minutes(activity, user, DateTime.utc_now(), get_elapsed_minutes) do
       {:ok, today} -> Map.merge(activity, today)
       {:error, _reason} -> Map.merge(activity, %{minutes: 0.0, play_minutes: 0.0})
+    end
+  end
+
+  defp client_opts(socket) do
+    case socket.assigns[:client] do
+      nil -> []
+      client -> [client: client]
     end
   end
 

@@ -35,4 +35,14 @@ defmodule TimingPlayTimeWeb.ConnCase do
     TimingPlayTime.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Pre-seeds the conn's session with a specific User's `user_id` (ADR-0006),
+  bypassing `TimingPlayTimeWeb.Plugs.CurrentUser`'s auto-provisioning so
+  tests can control exactly which User a request is authenticated as, and
+  seed persistence data for that User before rendering.
+  """
+  def log_in_user(conn, user) do
+    Plug.Test.init_test_session(conn, user_id: user.id)
+  end
 end

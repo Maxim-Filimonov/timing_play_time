@@ -1,6 +1,6 @@
 # Required TZ env var for local calendar-day boundaries
 
-**Status**: accepted
+**Status**: partially superseded by [ADR-0006](0006-multi-tenant-anonymous-cookie-accounts.md) — the "single-user, no per-user timezone" premise and the required-env-var delivery mechanism are superseded; the local-timezone day-boundary math and `tzdata` dependency below are unchanged.
 
 Every day-boundary calculation in the domain today is UTC (e.g. Timing-Derived Earned Total's "beginning of the calendar day containing Activated At"). Adding a per-Activity "today" breakdown surfaced that UTC-day boundaries are wrong for a user far from UTC — the day rolls over at noon or 1pm local time, so "today" numbers wouldn't match what the user means by today. We introduce a required `TZ` environment variable holding an IANA timezone name (e.g. `Pacific/Auckland`), used to compute the local calendar-day boundary for any local-day-scoped figure. The app errors if `TZ` is unset rather than defaulting to UTC, since a silent UTC fallback would reproduce the same wrong-boundary bug without any signal that it happened. Resolving the named zone (including its DST transitions) requires the `tzdata` dependency, since Elixir's default `Calendar.UTCOnlyTimeZoneDatabase` only understands `Etc/UTC`.
 

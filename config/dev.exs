@@ -62,6 +62,16 @@ config :timing_play_time, TimingPlayTimeWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :timing_play_time, dev_routes: true
 
+# Encrypts Integration credentials at rest (ADR-0007). Fixed for local dev,
+# same as `secret_key_base` above — production requires a real CLOAK_KEY env
+# var instead (config/runtime.exs).
+config :timing_play_time, TimingPlayTime.Vault,
+  ciphers: [
+    default:
+      {Cloak.Ciphers.AES.GCM,
+       tag: "AES.GCM.V1", key: Base.decode64!("bjWTFdQwvC7J3uersyPfZcvkjA4f/rfQ9d3LIfwnDLk=")}
+  ]
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

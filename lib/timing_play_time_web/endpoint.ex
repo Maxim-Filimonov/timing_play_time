@@ -1,14 +1,18 @@
 defmodule TimingPlayTimeWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :timing_play_time
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
+  # The session cookie holds only an opaque `user_id` pointer (ADR-0006) — the
+  # anonymous account itself. Encrypted (not just signed) so the value isn't
+  # plaintext-readable, long-lived (~1yr, fixed rather than sliding) so it
+  # survives browser restarts, and `secure` outside dev/test (no local TLS).
   @session_options [
     store: :cookie,
     key: "_timing_play_time_key",
     signing_salt: "jwzC4Mcy",
-    same_site: "Lax"
+    encryption_salt: "JxxTpi3H",
+    same_site: "Lax",
+    max_age: 60 * 60 * 24 * 365,
+    secure: Mix.env() not in [:dev, :test]
   ]
 
   socket "/live", Phoenix.LiveView.Socket,

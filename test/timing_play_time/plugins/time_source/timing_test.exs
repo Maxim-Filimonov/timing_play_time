@@ -10,7 +10,18 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
     activated_at: ~U[2026-07-01 14:32:07Z]
   }
 
+  # connect/1 isn't exercised here: it dials the real @mcp_url via
+  # ExMCP.Client.start_link, which MockServer.with_server's in-memory
+  # transport (used everywhere else in this file) doesn't intercept — there's
+  # no way to test it without either a real network call or a refactor to
+  # make the transport/URL injectable, neither of which this adapter does
+  # today.
+
   describe "get_elapsed_minutes/2" do
+    test "returns :not_connected when no client is given" do
+      assert {:error, :not_connected} = Timing.get_elapsed_minutes(@activity, [])
+    end
+
     test "sums entry durations (seconds) into minutes" do
       entries = [%{"duration" => 1800}, %{"duration" => 900}]
 

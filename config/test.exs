@@ -6,8 +6,14 @@ import Config
 # these defaults.
 config :timing_play_time,
   persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub,
-  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub,
-  local_timezone: "Pacific/Auckland"
+  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub
+
+config :timing_play_time, TimingPlayTime.Vault,
+  ciphers: [
+    default:
+      {Cloak.Ciphers.AES.GCM,
+       tag: "AES.GCM.V1", key: Base.decode64!("Yq84sNjNjd9y0YiqhRT3Z7VPt+5D2zDXDZ+lIDr7EKQ=")}
+  ]
 
 # Configure your database
 #

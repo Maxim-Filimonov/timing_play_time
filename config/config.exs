@@ -19,9 +19,10 @@ config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
 # ExMCP requires explicit user consent before an HTTP client talks to an
 # external origin. This app's Timing integration is authorized out-of-band by
-# the operator supplying TIMING_API_KEY, not by an interactive per-request
-# approval, so web.timingapp.com is marked trusted alongside ExMCP's
-# localhost defaults (which this config, since it's provided, must repeat).
+# each user supplying their own API key via the Settings page (ADR-0007),
+# not by an interactive per-request approval, so web.timingapp.com is marked
+# trusted alongside ExMCP's localhost defaults (which this config, since
+# it's provided, must repeat).
 config :ex_mcp, :security,
   trusted_origins: ["localhost", "127.0.0.1", "::1", "web.timingapp.com"]
 

@@ -8,6 +8,9 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
   @behaviour TimingPlayTime.Plugins.TimeSource
 
   @impl true
+  def connect(_credentials), do: {:ok, :stub_client}
+
+  @impl true
   def get_elapsed_minutes(activity, opts \\ []) do
     # Simulate different elapsed times based on time_source_identifier
     # In production, this would query the Timing app via MCP

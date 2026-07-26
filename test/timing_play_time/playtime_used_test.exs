@@ -1,77 +1,63 @@
 defmodule TimingPlayTime.PlaytimeUsedTest do
-  use ExUnit.Case, async: true
+  # async: false — see comment in activity_manager_test.exs.
+  use ExUnit.Case, async: false
 
   alias TimingPlayTime.PlaytimeUsed
   alias TimingPlayTime.Plugins.Persistence.Stub, as: PersistenceStub
 
-  describe "log_usage/1" do
-    setup do
-      :ok = PersistenceStub.clear_all_state()
-      %{}
-    end
+  setup do
+    :ok = PersistenceStub.clear_all_state()
+    %{user_id: Ecto.UUID.generate()}
+  end
 
-    test "logs playtime usage with current timestamp" do
-      assert {:ok, usage} = PlaytimeUsed.log_usage(30.0)
+  describe "log_usage/2" do
+    test "logs playtime usage with current timestamp", %{user_id: user_id} do
+      assert {:ok, usage} = PlaytimeUsed.log_usage(user_id, 30.0)
       assert usage.minutes == 30.0
       assert %DateTime{} = usage.logged_at
     end
 
-    test "accepts float values" do
-      assert {:ok, usage} = PlaytimeUsed.log_usage(45.5)
+    test "accepts float values", %{user_id: user_id} do
+      assert {:ok, usage} = PlaytimeUsed.log_usage(user_id, 45.5)
       assert usage.minutes == 45.5
     end
   end
 
-  describe "log_usage/2" do
-    setup do
-      :ok = PersistenceStub.clear_all_state()
-      %{}
-    end
-
-    test "logs playtime usage with custom timestamp" do
+  describe "log_usage/3" do
+    test "logs playtime usage with custom timestamp", %{user_id: user_id} do
       custom_time = ~U[2024-01-15 10:30:00Z]
-      assert {:ok, usage} = PlaytimeUsed.log_usage(20.0, custom_time)
+      assert {:ok, usage} = PlaytimeUsed.log_usage(user_id, 20.0, custom_time)
       assert usage.minutes == 20.0
       assert usage.logged_at == custom_time
     end
   end
 
-  describe "list_all/0" do
-    setup do
-      :ok = PersistenceStub.clear_all_state()
-      %{}
+  describe "list_all/1" do
+    test "returns empty list when no usage logged", %{user_id: user_id} do
+      assert {:ok, []} = PlaytimeUsed.list_all(user_id)
     end
 
-    test "returns empty list when no usage logged" do
-      assert {:ok, []} = PlaytimeUsed.list_all()
-    end
+    test "returns all logged usage for that user", %{user_id: user_id} do
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 10.0)
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 20.0)
 
-    test "returns all logged usage" do
-      {:ok, _} = PlaytimeUsed.log_usage(10.0)
-      {:ok, _} = PlaytimeUsed.log_usage(20.0)
-
-      assert {:ok, usages} = PlaytimeUsed.list_all()
+      assert {:ok, usages} = PlaytimeUsed.list_all(user_id)
       assert length(usages) == 2
     end
   end
 
-  describe "total_used/0" do
-    setup do
-      :ok = PersistenceStub.clear_all_state()
-      %{}
-    end
-
-    test "returns 0.0 when no usage logged" do
-      assert {:ok, total} = PlaytimeUsed.total_used()
+  describe "total_used/1" do
+    test "returns 0.0 when no usage logged", %{user_id: user_id} do
+      assert {:ok, total} = PlaytimeUsed.total_used(user_id)
       assert total == 0.0
     end
 
-    test "returns sum of all logged usage" do
-      {:ok, _} = PlaytimeUsed.log_usage(10.0)
-      {:ok, _} = PlaytimeUsed.log_usage(25.5)
-      {:ok, _} = PlaytimeUsed.log_usage(15.0)
+    test "returns sum of all logged usage", %{user_id: user_id} do
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 10.0)
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 25.5)
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 15.0)
 
-      assert {:ok, total} = PlaytimeUsed.total_used()
+      assert {:ok, total} = PlaytimeUsed.total_used(user_id)
       assert total == 50.5
     end
   end

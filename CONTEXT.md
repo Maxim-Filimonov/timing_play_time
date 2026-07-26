@@ -4,8 +4,16 @@ Converts real-world time spent on worthwhile activities (tracked in the Timing a
 
 ## Language
 
+**User**:
+The tenant boundary. Owns Activities, the Play Balance, an Integration, and a timezone. Identity is an anonymous, long-lived session cookie (see [ADR-0006](docs/adr/0006-multi-tenant-anonymous-cookie-accounts.md)) — there is no login, password, or email attached to a User; losing the cookie means losing access to that User's data.
+_Avoid_: Account, tenant (User is this app's term; "account" implies a login credential that doesn't exist here)
+
+**Integration**:
+A User's connection to one external time-tracking provider at a time (currently only Timing), holding provider-specific encrypted credentials (see [ADR-0007](docs/adr/0007-generic-per-user-integration-credentials.md)). Replaces what was previously a single global Timing API key shared by the whole app.
+_Avoid_: Connection, provider config
+
 **Activity**:
-A category of task that earns Play Minutes when time is logged against it. Maps 1:1 to a Timing Project by name/ID, and carries a Multiplier and an Activated At timestamp (only Timing entries on that Project from the beginning of that timestamp's calendar day onward count).
+A category of task that earns Play Minutes when time is logged against it. Maps 1:1 to a Timing Project by name/ID — scoped to the owning User's Integration, since each User now connects to their own Timing account — and carries a Multiplier and an Activated At timestamp (only Timing entries on that Project from the beginning of that timestamp's calendar day onward count).
 _Avoid_: Task, Chore, Project (Project is Timing's term for the underlying tracked entity; Activity is this app's wrapper around it with a multiplier attached)
 
 **Multiplier**:

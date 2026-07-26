@@ -4,7 +4,25 @@ defmodule TimingPlayTime.Plugins.TimeSource do
 
   This allows swapping between different time tracking backends (e.g., Timing app via MCP,
   manual entries, other tracking tools) without changing the core domain logic.
+
+  Per ADR-0007, there is no global boot-time connection: the dashboard
+  LiveView opens one connection per mount via `connect/1`, using that
+  session's user's stored Integration credentials, and reuses it across its
+  60-second live-refresh timer.
   """
+
+  @doc """
+  Opens a connection using a user's Integration credentials (the map stored
+  in `TimingPlayTime.Accounts.Integration.credentials` — shape is owned by
+  the adapter). The caller is responsible for the connection's lifetime; for
+  the dashboard LiveView, that means it dies naturally with the LiveView
+  process when the tab closes.
+
+  ## Returns
+    * `{:ok, client}` - Opaque handle, passed back in as `opts[:client]`
+    * `{:error, reason}` - If the connection can't be established
+  """
+  @callback connect(credentials :: map()) :: {:ok, term()} | {:error, term()}
 
   @doc """
   Gets elapsed minutes for a given activity within a time range.

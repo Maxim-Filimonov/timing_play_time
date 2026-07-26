@@ -1,6 +1,6 @@
 defmodule TimingPlayTime.PlayBalance do
   @moduledoc """
-  Calculates the current Play Balance.
+  Calculates a User's current Play Balance (ADR-0006).
 
   Play Balance = Timing-Derived Earned Total + Manual Sync - Playtime Used Total
 
@@ -16,7 +16,11 @@ defmodule TimingPlayTime.PlayBalance do
   @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
   @doc """
-  Computes the current Play Balance.
+  Computes the current Play Balance for a user.
+
+  `time_source_opts` is merged into every `get_elapsed_minutes/2` call — used
+  to pass the per-mount `client:` connection opened by the dashboard LiveView
+  (ADR-0007), rather than a global singleton.
 
   Returns a map with:
   - `:total` - The net balance (can be negative)
@@ -26,7 +30,7 @@ defmodule TimingPlayTime.PlayBalance do
 
   ## Examples
 
-      iex> PlayBalance.compute()
+      iex> PlayBalance.compute(user)
       {:ok, %{
         total: 142.0,
         timing_derived_total: 187.0,
@@ -34,10 +38,10 @@ defmodule TimingPlayTime.PlayBalance do
         playtime_used_total: 45.0
       }}
   """
-  def compute do
-    with {:ok, timing_derived} <- compute_timing_derived_total(),
-         {:ok, manual_sync} <- get_manual_sync_total(),
-         {:ok, playtime_used} <- get_playtime_used_total() do
+  def compute(user, time_source_opts \\ []) do
+    with {:ok, timing_derived} <- compute_timing_derived_total(user, time_source_opts),
+         {:ok, manual_sync} <- get_manual_sync_total(user),
+         {:ok, playtime_used} <- get_playtime_used_total(user) do
       balance = %{
         timing_derived_total: timing_derived,
         manual_sync_total: manual_sync,
@@ -51,8 +55,8 @@ defmodule TimingPlayTime.PlayBalance do
 
   @doc """
   Computes an Activity's raw Timing minutes and Play Minutes for just today
-  (the local calendar day, per ADR-0005), for the dashboard's per-Activity
-  breakdown.
+  (the user's local calendar day, per `user.timezone` / ADR-0006), for the
+  dashboard's per-Activity breakdown.
 
   `from` is the later of the local start-of-day and the Activity's
   Activated At, so an Activity activated later today only counts from
@@ -60,15 +64,16 @@ defmodule TimingPlayTime.PlayBalance do
 
   ## Examples
 
-      iex> PlayBalance.today_activity_minutes(activity)
+      iex> PlayBalance.today_activity_minutes(activity, user)
       {:ok, %{minutes: 27.5, play_minutes: 41.25}}
   """
   def today_activity_minutes(
         activity,
+        user,
         now \\ DateTime.utc_now(),
         get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
       ) do
-    from = later(activity.activated_at, LocalDay.start_of_today(now))
+    from = later(activity.activated_at, LocalDay.start_of_today(user.timezone, now))
 
     with {:ok, minutes} <- get_elapsed_minutes.(activity, from: from, to: now) do
       {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
@@ -81,11 +86,11 @@ defmodule TimingPlayTime.PlayBalance do
 
   # Private functions
 
-  defp compute_timing_derived_total do
-    with {:ok, activities} <- @persistence.list_activities() do
+  defp compute_timing_derived_total(user, time_source_opts) do
+    with {:ok, activities} <- @persistence.list_activities(user.id) do
       total =
         Enum.reduce(activities, 0.0, fn activity, acc ->
-          case @time_source.get_elapsed_minutes(activity) do
+          case @time_source.get_elapsed_minutes(activity, time_source_opts) do
             {:ok, minutes} ->
               acc + minutes * activity.multiplier
 
@@ -99,11 +104,11 @@ defmodule TimingPlayTime.PlayBalance do
     end
   end
 
-  defp get_manual_sync_total do
-    @persistence.get_manual_sync_total()
+  defp get_manual_sync_total(user) do
+    @persistence.get_manual_sync_total(user.id)
   end
 
-  defp get_playtime_used_total do
-    @persistence.total_playtime_used()
+  defp get_playtime_used_total(user) do
+    @persistence.total_playtime_used(user.id)
   end
 end

@@ -5,6 +5,11 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
 
   Calls the `list_time_entries` tool for the Activity's mapped Timing
   Project and sums entry durations (seconds) into minutes.
+
+  Per ADR-0007, there is no boot-time singleton connection holding one
+  global API key — `connect/1` opens a connection per call to `credentials`
+  (a User's Integration, `%{"api_key" => "..."}"`), and the caller (the
+  dashboard LiveView) owns that connection's lifetime.
   """
 
   @behaviour TimingPlayTime.Plugins.TimeSource
@@ -13,15 +18,12 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
 
   @mcp_url "https://web.timingapp.com/mcp"
 
-  def child_spec(opts) do
-    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
-  end
-
-  def start_link(_opts) do
+  @impl true
+  def connect(credentials) do
     ExMCP.Client.start_link(
       transport: :http,
       url: @mcp_url,
-      auth_provider: {ExMCP.Authorization.Provider.Static, token: api_key()},
+      auth_provider: {ExMCP.Authorization.Provider.Static, token: Map.fetch!(credentials, "api_key")},
       security: %{tls: %{cacerts: castore_cacerts()}},
       # ex_mcp 1.0.0-rc.4's SSE-reconnect path (ExMCP.Transport.SSEClient) wraps
       # the already-wrapped `security.tls` ssl_opts a second time, producing a
@@ -29,14 +31,19 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
       # falls back to the OS cacerts lookup, which fails here. We only ever
       # make request/response tool calls (no server-initiated push), so the
       # SSE stream isn't needed and disabling it sidesteps the bug.
-      use_sse: false,
-      name: __MODULE__
+      use_sse: false
     )
   end
 
   @impl true
   def get_elapsed_minutes(activity, opts \\ []) do
-    client = Keyword.get(opts, :client, __MODULE__)
+    case Keyword.get(opts, :client) do
+      nil -> {:error, :not_connected}
+      client -> do_get_elapsed_minutes(activity, client, opts)
+    end
+  end
+
+  defp do_get_elapsed_minutes(activity, client, opts) do
     from = Keyword.get(opts, :from, default_from(activity.activated_at))
     to = Keyword.get(opts, :to, DateTime.utc_now())
 
@@ -145,11 +152,6 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   # than the wide since-activation range (silently filtered to no matches).
   defp iso8601_no_microseconds(datetime) do
     datetime |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-  end
-
-  defp api_key do
-    Application.get_env(:timing_play_time, __MODULE__, [])
-    |> Keyword.fetch!(:api_key)
   end
 
   # ExMCP's HTTP transport defaults to `:public_key.cacerts_get/0` for the CA

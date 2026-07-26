@@ -4,6 +4,7 @@ defmodule TimingPlayTimeWeb.Router do
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
+    plug TimingPlayTimeWeb.Plugs.CurrentUser
     plug :fetch_live_flash
     plug :put_root_layout, html: {TimingPlayTimeWeb.Layouts, :root}
     plug :protect_from_forgery
@@ -17,7 +18,10 @@ defmodule TimingPlayTimeWeb.Router do
   scope "/", TimingPlayTimeWeb do
     pipe_through :browser
 
-    live "/", DashboardLive
+    live_session :default, on_mount: TimingPlayTimeWeb.LiveAuth do
+      live "/", DashboardLive
+      live "/settings", SettingsLive
+    end
   end
 
   # Other scopes may use custom stacks.

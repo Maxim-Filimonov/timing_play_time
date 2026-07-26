@@ -11,7 +11,7 @@ defmodule TimingPlayTime.Application do
     time_source_adapter = Application.fetch_env!(:timing_play_time, :time_source_adapter)
 
     children =
-      [TimingPlayTimeWeb.Telemetry] ++
+      [TimingPlayTimeWeb.Telemetry, TimingPlayTime.Vault] ++
         supervised_adapter_children(persistence_adapter) ++
         supervised_adapter_children(time_source_adapter) ++
         [

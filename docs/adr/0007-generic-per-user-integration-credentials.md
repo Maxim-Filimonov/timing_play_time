@@ -1,0 +1,20 @@
+# Generic per-user Integration credentials, replacing the Timing singleton
+
+**Status**: accepted
+
+Depends on [ADR-0006](0006-multi-tenant-anonymous-cookie-accounts.md)'s multi-tenancy. `TIMING_API_KEY` (a required boot-time env var, `config/runtime.exs`) is replaced by a generic `integrations` table: one row per `User` (unique on `user_id`), holding a `provider` (currently only `:timing`) and a single encrypted `credentials` map (via `cloak`/`cloak_ecto`, a new `CLOAK_KEY` env var). Each provider adapter module owns interpretation of its own `credentials` shape — there is no fixed `api_key` column — so adding a second `TimeSource` provider later (per [ADR-0002](0002-microkernel-plugin-architecture.md)'s plug-in contract) needs a new adapter module, not a schema migration.
+
+This forces an architectural change to `TimingPlayTime.Plugins.TimeSource.Timing` (`lib/timing_play_time/plugins/time_source/timing.ex`): it can no longer be a single boot-time singleton process holding one global API key (`child_spec`/`start_link`, permanently supervised per `lib/timing_play_time/application.ex` and `config/config.exs`), since every user now has their own credentials. Instead, one `ExMCP.Client` connection is opened when the dashboard LiveView mounts (using that session's `User`'s stored credentials), reused for the lifetime of that LiveView process, and torn down naturally when it terminates (tab closed/navigated away). While mounted, a 60-second repeating timer (`Process.send_after`) re-runs `PlayBalance.compute()` and pushes updates to the socket, so the dashboard stays live without a manual page refresh — mirroring the existing PubSub-driven refresh already used for manual-sync/log-playtime events (`lib/timing_play_time_web/live/dashboard_live.ex`). Refresh only happens while a dashboard is actively open; there is no background/away-from-tab refresh and no job-scheduling infrastructure (no Oban).
+
+## Considered Options
+
+- **`integrations` as a multi-row table with an `active` flag** (allowing several providers configured but one active) — rejected as premature: nothing today needs more than one configured provider per user, and it can be introduced later as its own migration if that changes.
+- **Stateless, ephemeral `ExMCP.Client` per call** — the first design reached during grilling, reasonable when calls were only page-load-driven. Reopened once live-refresh-while-mounted was introduced: reopening a TLS+MCP handshake on every 60-second poll tick for as long as a tab stays open is wasteful compared to one connection reused across ticks.
+- **Per-user persistent connection via `DynamicSupervisor` + `Registry`**, lazily started and idle-reaped — rejected as more moving parts (supervision, registry lookup, idle-timeout logic) than the call pattern justifies; scoping the connection to the LiveView process's own lifetime gets the same reuse benefit for free, since Phoenix already manages that process's lifecycle.
+- **Background refresh via a job queue (Oban)**, keeping data fresh even with no tab open — rejected as solving a problem that wasn't asked for; the stated need was "don't make me hit refresh while I'm looking at the page," which a mount-scoped timer satisfies without new infrastructure.
+
+## Consequences
+
+- New `integrations` table: `user_id` (unique), `provider`, `credentials` (encrypted map), timestamps.
+- New `CLOAK_KEY` env var (base64-encoded 32 bytes) for `cloak_ecto` field encryption. No key-rotation tooling exists yet — losing or rotating this key without a re-encryption pass makes every stored `credentials` blob permanently undecryptable, requiring every user to re-enter their integration credentials. Accepted as out of scope for now.
+- `TimingPlayTime.Plugins.TimeSource.Timing` is no longer a supervised child; `lib/timing_play_time/application.ex` and `config/config.exs`'s adapter wiring change accordingly. The `TimeSource` behaviour contract (per ADR-0002) gains a way to pass per-call credentials instead of reading `Application.get_env` internally.

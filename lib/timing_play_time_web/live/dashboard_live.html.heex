@@ -1,6 +1,23 @@
 <Layouts.app flash={@flash}>
+  <div id="timezone-detector" phx-hook=".TimezoneDetector"></div>
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".TimezoneDetector">
+    export default {
+      mounted() {
+        this.pushEvent("detected_timezone", {
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        })
+      }
+    }
+  </script>
+
   <div class="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50 px-4 py-8">
     <div class="mx-auto max-w-4xl space-y-8">
+      <div class="flex justify-end">
+        <a href={~p"/settings"} class="text-purple-700 hover:text-purple-900 text-sm font-semibold">
+          ⚙️ Settings
+        </a>
+      </div>
+
       <%!-- Play Balance Hero Section --%>
       <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-600 via-purple-700 to-indigo-800 p-8 text-white shadow-2xl">
         <div class="relative z-10">

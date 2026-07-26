@@ -20,33 +20,9 @@ if System.get_env("PHX_SERVER") do
   config :timing_play_time, TimingPlayTimeWeb.Endpoint, server: true
 end
 
-# Unlike DATABASE_PATH below, this isn't gated to :prod: the Timing adapter
-# is the compile-time default in every env (config/config.exs), so dev needs
-# a real key too. Only :test opts back out, via its Stub override.
-unless config_env() == :test do
-  timing_api_key =
-    System.get_env("TIMING_API_KEY") ||
-      raise """
-      environment variable TIMING_API_KEY is missing.
-      Generate a personal API key in Timing's web app (API Keys section) and set:
-          export TIMING_API_KEY=...
-      """
-
-  config :timing_play_time, TimingPlayTime.Plugins.TimeSource.Timing, api_key: timing_api_key
-
-  # Required so local-day-scoped figures (e.g. today's per-Activity minutes)
-  # use the operator's actual calendar day rather than UTC's (ADR-0005). No
-  # default: a silent UTC fallback would reproduce the bug this exists to fix.
-  local_timezone =
-    System.get_env("TZ") ||
-      raise """
-      environment variable TZ is missing.
-      Set it to your IANA timezone name, e.g.:
-          export TZ=Pacific/Auckland
-      """
-
-  config :timing_play_time, :local_timezone, local_timezone
-end
+# TIMING_API_KEY and TZ were required boot-time env vars here before ADR-0006/
+# ADR-0007 — both are now per-user (Integration credentials, users.timezone)
+# instead of app-wide config, so there's nothing to read at boot anymore.
 
 if config_env() == :prod do
   database_path =
@@ -76,6 +52,23 @@ if config_env() == :prod do
   port = String.to_integer(System.get_env("PORT") || "4000")
 
   config :timing_play_time, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+
+  # Encrypts Integration credentials at rest (ADR-0007). A default is used in
+  # config/dev.exs and config/test.exs, same as `secret_key_base`, but prod
+  # needs a real, non-committed key. Losing/rotating this without a
+  # re-encryption pass makes stored credentials permanently undecryptable —
+  # no rotation tooling exists yet.
+  cloak_key =
+    System.get_env("CLOAK_KEY") ||
+      raise """
+      environment variable CLOAK_KEY is missing.
+      Generate one by calling: 32 |> :crypto.strong_rand_bytes() |> Base.encode64()
+      """
+
+  config :timing_play_time, TimingPlayTime.Vault,
+    ciphers: [
+      default: {Cloak.Ciphers.AES.GCM, tag: "AES.GCM.V1", key: Base.decode64!(cloak_key)}
+    ]
 
   config :timing_play_time, TimingPlayTimeWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],

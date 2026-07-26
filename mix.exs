@@ -61,7 +61,9 @@ defmodule TimingPlayTime.MixProject do
       {:bandit, "~> 1.5"},
       {:ex_mcp, "~> 1.0.0-rc.4"},
       {:castore, "~> 1.0"},
-      {:tzdata, "~> 1.1"}
+      {:tzdata, "~> 1.1"},
+      {:cloak, "~> 1.1"},
+      {:cloak_ecto, "~> 1.3"}
     ]
   end
 

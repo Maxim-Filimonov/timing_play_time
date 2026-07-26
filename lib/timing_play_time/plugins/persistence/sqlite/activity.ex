@@ -10,11 +10,12 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite.Activity do
     field :time_source_identifier, :string
     field :multiplier, :float
     field :activated_at, :utc_datetime
+    field :user_id, :binary_id
 
     timestamps(type: :utc_datetime)
   end
 
-  @fields [:name, :time_source_identifier, :multiplier, :activated_at]
+  @fields [:name, :time_source_identifier, :multiplier, :activated_at, :user_id]
 
   def changeset(activity, attrs) do
     activity
