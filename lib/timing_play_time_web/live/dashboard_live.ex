@@ -18,18 +18,31 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
 
-    if connected?(socket) do
-      Phoenix.PubSub.subscribe(TimingPlayTime.PubSub, balance_topic(user))
-      Process.send_after(self(), :refresh, @refresh_interval_ms)
-    end
-
     socket =
       socket
       |> assign(:page_title, "Dashboard")
       |> assign(:client, nil)
-      |> open_time_source_connection()
-      |> load_balance()
-      |> load_activities()
+      |> assign(:balance, nil)
+      |> assign(:activities, nil)
+
+    # The static (disconnected) render has no client to query Timing with, so
+    # `get_elapsed_minutes` would fail and silently score every Activity as 0
+    # (per compute_timing_derived_total's "skip failed activities" behaviour)
+    # — showing a spurious, often-negative balance that then jumps to the
+    # real number once the socket connects. Deferring all of this to the
+    # connected mount avoids that flash and shows a loading state instead.
+    socket =
+      if connected?(socket) do
+        Phoenix.PubSub.subscribe(TimingPlayTime.PubSub, balance_topic(user))
+        Process.send_after(self(), :refresh, @refresh_interval_ms)
+
+        socket
+        |> open_time_source_connection()
+        |> load_balance()
+        |> load_activities()
+      else
+        socket
+      end
 
     {:ok, socket}
   end
