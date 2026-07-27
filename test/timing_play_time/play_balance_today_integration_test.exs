@@ -52,10 +52,14 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
       )
     end
 
-    test "clamps to Activated At, excluding an earlier entry from before activation" do
+    test "counts entries from local start-of-day even when activated later that same day" do
       # Activated at 2026-07-25T18:00:00Z: after local start-of-day
       # (2026-07-25T12:00:00Z) but still "today" in local terms
-      # (2026-07-26T06:00:00+12:00), so the clamp should use activated_at.
+      # (2026-07-26T06:00:00+12:00) — activation partway through today must
+      # not clamp `from` forward past local start-of-day, matching the
+      # Timing-Derived Earned Total's day-boundary parity (an Activity
+      # activated mid-day still earns for time already logged earlier that
+      # same day).
       activity = %{
         activated_at: ~U[2026-07-25 18:00:00Z],
         time_source_identifier: "coding-proj-1",
@@ -65,7 +69,7 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
       now = ~U[2026-07-26 05:00:00Z]
 
       entries = [
-        # After local start-of-day but before activation — must be excluded.
+        # After local start-of-day but before activation — must be counted.
         %{"duration" => 9999, "start_date" => "2026-07-25T15:00:00+00:00"},
         # After activation — must be counted.
         %{"duration" => 1800, "start_date" => "2026-07-26T01:00:00+00:00"}
@@ -76,7 +80,7 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
         fn client ->
           get_elapsed_minutes = fn a, opts -> Timing.get_elapsed_minutes(a, opts ++ [client: client]) end
 
-          assert {:ok, %{minutes: 30.0, play_minutes: 60.0}} =
+          assert {:ok, %{minutes: 196.65, play_minutes: 393.3}} =
                    PlayBalance.today_activity_minutes(activity, @user, now, get_elapsed_minutes)
         end
       )

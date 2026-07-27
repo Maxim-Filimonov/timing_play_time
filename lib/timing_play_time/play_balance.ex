@@ -58,9 +58,11 @@ defmodule TimingPlayTime.PlayBalance do
   (the user's local calendar day, per `user.timezone` / ADR-0006), for the
   dashboard's per-Activity breakdown.
 
-  `from` is the later of the local start-of-day and the Activity's
-  Activated At, so an Activity activated later today only counts from
-  activation onward.
+  `from` is the later of local start-of-today and the local start-of-day
+  containing the Activity's Activated At — so an Activity activated later
+  today still counts entries logged earlier that same local day (matching
+  the Timing-Derived Earned Total's day-boundary parity), while an Activity
+  activated on an earlier day is clamped to just today.
 
   ## Examples
 
@@ -73,7 +75,11 @@ defmodule TimingPlayTime.PlayBalance do
         now \\ DateTime.utc_now(),
         get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
       ) do
-    from = later(activity.activated_at, LocalDay.start_of_today(user.timezone, now))
+    from =
+      later(
+        LocalDay.start_of_today(user.timezone, activity.activated_at),
+        LocalDay.start_of_today(user.timezone, now)
+      )
 
     with {:ok, minutes} <- get_elapsed_minutes.(activity, from: from, to: now) do
       {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}

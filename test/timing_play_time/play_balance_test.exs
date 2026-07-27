@@ -134,22 +134,29 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert_in_delta play_minutes, minutes * 2.0, 0.001
     end
 
-    test "clamps to activated_at when the activity was activated later today", %{user: user} do
+    test "still counts from local start-of-day when the activity was activated later today", %{
+      user: user
+    } do
       {:ok, activity} =
         PersistenceStub.create_activity(user.id, %{
           name: "Learning",
           time_source_identifier: "learning-proj-1",
           multiplier: 1.0,
-          # After local start-of-today (2026-07-24T12:00:00Z) but before `now`.
+          # Same local calendar day as `now` (Pacific/Auckland), but after
+          # local start-of-today (2026-07-24T12:00:00Z) — activation happened
+          # partway through today, not at midnight.
           activated_at: ~U[2026-07-25 01:00:00Z]
         })
 
+      # Local start of today is still 2026-07-24T12:00:00Z; `from` must not
+      # clamp forward to activated_at, so elapsed today = 22/24 days, not 9/24
+      # — matching the Timing-Derived Earned Total's day-boundary parity.
       now = ~U[2026-07-25 10:00:00Z]
 
       assert {:ok, %{minutes: minutes, play_minutes: play_minutes}} =
                PlayBalance.today_activity_minutes(activity, user, now)
 
-      assert_in_delta minutes, 42.0 * (9 / 24), 0.01
+      assert_in_delta minutes, 42.0 * (22 / 24), 0.01
       assert_in_delta play_minutes, minutes, 0.001
     end
   end
