@@ -26,6 +26,8 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> assign(:today, nil)
       |> assign(:show_debug, false)
       |> assign(:activities, nil)
+      |> assign(:editing_activity_id, nil)
+      |> assign(:editing_multiplier, nil)
 
     # The static (disconnected) render has no client to query Timing with, so
     # `get_elapsed_minutes` would fail and silently score every Activity as 0
@@ -114,6 +116,68 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     {:noreply, assign(socket, :show_debug, false)}
   end
 
+  @multiplier_step 0.1
+
+  @impl true
+  def handle_event("edit_activity", %{"id" => id}, socket) do
+    activity = Enum.find(socket.assigns.activities, &(&1.id == id))
+
+    socket =
+      socket
+      |> assign(:editing_activity_id, id)
+      |> assign(:editing_multiplier, activity.multiplier)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("cancel_edit_activity", _params, socket) do
+    socket =
+      socket
+      |> assign(:editing_activity_id, nil)
+      |> assign(:editing_multiplier, nil)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("increment_multiplier", _params, socket) do
+    {:noreply, update(socket, :editing_multiplier, &step_multiplier(&1, @multiplier_step))}
+  end
+
+  @impl true
+  def handle_event("decrement_multiplier", _params, socket) do
+    {:noreply, update(socket, :editing_multiplier, &step_multiplier(&1, -@multiplier_step))}
+  end
+
+  @impl true
+  def handle_event(
+        "save_activity",
+        %{"activity_id" => id, "name" => name, "time_source_identifier" => time_source_identifier},
+        socket
+      ) do
+    attrs = %{
+      name: name,
+      time_source_identifier: time_source_identifier,
+      multiplier: socket.assigns.editing_multiplier
+    }
+
+    socket =
+      case ActivityManager.update_activity(socket.assigns.current_user.id, id, attrs) do
+        {:ok, _activity} ->
+          socket
+          |> assign(:editing_activity_id, nil)
+          |> assign(:editing_multiplier, nil)
+          |> load_activities()
+          |> put_flash(:info, "Updated activity #{name}!")
+
+        {:error, _reason} ->
+          put_flash(socket, :error, "Please fill in every field with valid values")
+      end
+
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_event(
         "create_activity",
@@ -153,6 +217,12 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> load_activities()
 
     {:noreply, socket}
+  end
+
+  # Rounded to 1 decimal place to avoid float drift from repeated +/- 0.1 steps
+  # (e.g. 1.1 + 0.1 - 0.1 landing on 1.0999999999999999).
+  defp step_multiplier(multiplier, delta) do
+    (multiplier + delta) |> max(0.0) |> Float.round(1)
   end
 
   defp balance_topic(user), do: "play_balance:#{user.id}"

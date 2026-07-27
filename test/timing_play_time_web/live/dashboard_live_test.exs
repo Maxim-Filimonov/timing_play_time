@@ -108,6 +108,122 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     refute html =~ "Your Play Balance"
   end
 
+  test "clicking Edit on an Activity shows an inline form pre-filled with its current values", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.5,
+        activated_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    html = render_click(view, "edit_activity", %{"id" => activity.id})
+
+    assert html =~ ~s(value="Coding")
+    assert html =~ ~s(value="coding-proj-1")
+    assert html =~ ~s(value="1.5")
+  end
+
+  test "clicking Cancel while editing an Activity returns to the display view", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.5,
+        activated_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_click(view, "edit_activity", %{"id" => activity.id})
+    html = render_click(view, "cancel_edit_activity", %{"id" => activity.id})
+
+    refute html =~ ~s(value="coding-proj-1")
+  end
+
+  test "clicking + on the multiplier stepper while editing bumps the displayed value by 0.1", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.5,
+        activated_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_click(view, "edit_activity", %{"id" => activity.id})
+    html = render_click(view, "increment_multiplier", %{})
+
+    assert html =~ ~s(value="1.6")
+    refute html =~ ~s(value="1.5")
+  end
+
+  test "clicking - on the multiplier stepper while editing decrements the displayed value by 0.1, clamped at 0.0",
+       %{conn: conn, user: user} do
+    {:ok, activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 0.05,
+        activated_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_click(view, "edit_activity", %{"id" => activity.id})
+    html = render_click(view, "decrement_multiplier", %{})
+
+    assert html =~ ~s(value="0.0")
+  end
+
+  test "submitting the edit form saves the new name, source id, and stepped multiplier", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.5,
+        activated_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    render_click(view, "edit_activity", %{"id" => activity.id})
+    render_click(view, "increment_multiplier", %{})
+
+    html =
+      view
+      |> form("form[phx-submit=save_activity]", %{
+        "name" => "Deep Work",
+        "time_source_identifier" => "deep-work-proj"
+      })
+      |> render_submit()
+
+    assert html =~ "Deep Work"
+    assert html =~ "deep-work-proj"
+    assert html =~ "1.6"
+    refute html =~ ~s(value="Deep Work")
+
+    assert {:ok, saved} = PersistenceStub.get_activity(user.id, activity.id)
+    assert saved.name == "Deep Work"
+    assert saved.time_source_identifier == "deep-work-proj"
+    assert saved.multiplier == 1.6
+  end
+
   test "reveals the cumulative Play Balance debug overlay on reveal_debug, and hides it again on hide_debug",
        %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/")
