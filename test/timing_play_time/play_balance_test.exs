@@ -160,4 +160,78 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert_in_delta play_minutes, minutes, 0.001
     end
   end
+
+  describe "compute_today/3" do
+    test "sums today's earned Play Minutes and today's used minutes, plus all-time Exercise Minutes",
+         %{user: user} do
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 2.0,
+          activated_at: ~U[2026-07-01 00:00:00Z]
+        })
+
+      {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 10.0)
+
+      # Local start of today is 2026-07-24T12:00:00Z.
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 999.0, ~U[2026-07-24 11:00:00Z])
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 30.0, ~U[2026-07-25 09:00:00Z])
+
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now)
+
+      assert_in_delta today.earned_today, 45.0 * (22 / 24) * 2.0, 0.01
+      assert today.used_today == 30.0
+      assert today.exercise_minutes == 10.0
+      assert_in_delta today.today_net, today.earned_today - 30.0, 0.001
+      assert_in_delta today.playtime, today.today_net + 10.0, 0.001
+    end
+
+    test "skips an activity whose get_elapsed_minutes call fails, rather than failing the whole computation",
+         %{user: user} do
+      {:ok, _broken} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Broken",
+          time_source_identifier: "broken-proj",
+          multiplier: 1.0,
+          activated_at: ~U[2026-07-01 00:00:00Z]
+        })
+
+      {:ok, _working} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-07-01 00:00:00Z]
+        })
+
+      now = ~U[2026-07-25 10:00:00Z]
+
+      get_elapsed_minutes = fn
+        %{time_source_identifier: "broken-proj"}, _opts -> {:error, :boom}
+        activity, opts -> TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes(activity, opts)
+      end
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], get_elapsed_minutes)
+
+      assert_in_delta today.earned_today, 45.0 * (22 / 24), 0.01
+    end
+
+    test "allows today_net and playtime to go negative when Playtime Used exceeds what was earned",
+         %{user: user} do
+      {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 5.0)
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 100.0, ~U[2026-07-25 09:00:00Z])
+
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now)
+
+      assert today.earned_today == 0.0
+      assert today.used_today == 100.0
+      assert today.today_net == -100.0
+      assert today.playtime == -95.0
+    end
+  end
 end

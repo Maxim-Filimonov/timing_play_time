@@ -86,4 +86,37 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
     assert html =~ ~s(href="/settings")
   end
+
+  test "shows the day-scoped Playtime hero, with the cumulative Play Balance hidden by default", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, _activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.0,
+        activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    assert html =~ "Playtime"
+    assert html =~ "Earned Today"
+    assert html =~ "Used Today"
+    assert html =~ "Exercise Minutes (Total)"
+    refute html =~ "Your Play Balance"
+  end
+
+  test "reveals the cumulative Play Balance debug overlay on reveal_debug, and hides it again on hide_debug",
+       %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/")
+    refute html =~ "Your Play Balance"
+
+    html = render_hook(view, "reveal_debug", %{})
+    assert html =~ "Your Play Balance"
+
+    html = render_click(view, "hide_debug")
+    refute html =~ "Your Play Balance"
+  end
 end

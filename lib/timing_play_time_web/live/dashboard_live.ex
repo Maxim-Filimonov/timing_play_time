@@ -23,6 +23,8 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> assign(:page_title, "Dashboard")
       |> assign(:client, nil)
       |> assign(:balance, nil)
+      |> assign(:today, nil)
+      |> assign(:show_debug, false)
       |> assign(:activities, nil)
 
     # The static (disconnected) render has no client to query Timing with, so
@@ -103,6 +105,16 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   end
 
   @impl true
+  def handle_event("reveal_debug", _params, socket) do
+    {:noreply, assign(socket, :show_debug, true)}
+  end
+
+  @impl true
+  def handle_event("hide_debug", _params, socket) do
+    {:noreply, assign(socket, :show_debug, false)}
+  end
+
+  @impl true
   def handle_event(
         "create_activity",
         %{"name" => name, "time_source_identifier" => time_source_identifier, "multiplier" => multiplier_str},
@@ -175,17 +187,43 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     user = socket.assigns.current_user
     time_source_opts = client_opts(socket)
 
-    case PlayBalance.compute(user, time_source_opts) do
-      {:ok, balance} ->
-        assign(socket, :balance, balance)
+    socket =
+      case PlayBalance.compute(user, time_source_opts) do
+        {:ok, balance} ->
+          assign(socket, :balance, balance)
 
-      {:error, _reason} ->
-        assign(socket, :balance, %{
-          total: 0.0,
-          timing_derived_total: 0.0,
-          manual_sync_total: 0.0,
-          playtime_used_total: 0.0
-        })
+        {:error, _reason} ->
+          assign(socket, :balance, %{
+            total: 0.0,
+            timing_derived_total: 0.0,
+            manual_sync_total: 0.0,
+            playtime_used_total: 0.0
+          })
+      end
+
+    load_today(socket, user, time_source_opts)
+  end
+
+  @empty_today %{
+    earned_today: 0.0,
+    used_today: 0.0,
+    exercise_minutes: 0.0,
+    today_net: 0.0,
+    playtime: 0.0
+  }
+
+  # Briefly nil on a brand-new anonymous user, until the `.TimezoneDetector`
+  # hook's first pushEvent lands (ADR-0006) — LocalDay needs a real IANA
+  # zone name, so this shows zero rather than crashing (mirrors
+  # `with_today_minutes/2`'s same guard for the per-Activity figures).
+  defp load_today(socket, %{timezone: nil}, _time_source_opts) do
+    assign(socket, :today, @empty_today)
+  end
+
+  defp load_today(socket, user, time_source_opts) do
+    case PlayBalance.compute_today(user, DateTime.utc_now(), time_source_opts) do
+      {:ok, today} -> assign(socket, :today, today)
+      {:error, _reason} -> assign(socket, :today, @empty_today)
     end
   end
 

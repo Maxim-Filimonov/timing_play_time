@@ -10,6 +10,24 @@
     }
   </script>
 
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".DebugTrigger">
+    export default {
+      // Triple-click within 600ms reveals the debug overlay — a deliberate
+      // gesture, not a click a normal user makes by accident.
+      mounted() {
+        this.clickTimes = []
+        this.el.addEventListener("click", () => {
+          const now = Date.now()
+          this.clickTimes = [...this.clickTimes, now].filter(t => now - t < 600)
+          if (this.clickTimes.length >= 3) {
+            this.clickTimes = []
+            this.pushEvent("reveal_debug", {})
+          }
+        })
+      }
+    }
+  </script>
+
   <div class="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50 px-4 py-8">
     <div class="mx-auto max-w-4xl space-y-8">
       <div class="flex justify-end">
@@ -18,19 +36,88 @@
         </a>
       </div>
 
-      <%!-- Play Balance Hero Section --%>
+      <%!-- Playtime Hero Section (day-scoped; the all-time cumulative Play
+      Balance lives in the debug overlay below, per the redesign — see
+      CONTEXT.md's Play Balance entry for why it isn't shown here) --%>
       <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-purple-600 via-purple-700 to-indigo-800 p-8 text-white shadow-2xl">
         <div class="relative z-10">
-          <h1 class="text-4xl font-bold mb-2">Your Play Balance</h1>
-          <p class="text-purple-200 mb-6">Time you've earned to spend on fun!</p>
+          <h1 class="text-4xl font-bold mb-2">Playtime</h1>
+          <p class="text-purple-200 mb-6">Time you've earned to spend on fun today!</p>
 
-          <%= if @balance do %>
+          <%= if @today do %>
+            <div class="flex items-baseline gap-3 mb-6">
+              <span class={"text-7xl font-black #{if @today.playtime < 0, do: "text-red-300"}"}>
+                {Float.round(@today.playtime, 1)}
+              </span>
+              <span class="text-3xl font-semibold text-purple-200">minutes</span>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-4 text-sm">
+              <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+                <div class="text-purple-200 mb-2 font-semibold">Today's</div>
+                <div class="flex justify-between">
+                  <span>Earned Today</span>
+                  <span class="font-bold">{Float.round(@today.earned_today, 1)}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>Used Today</span>
+                  <span class="font-bold text-red-300">{Float.round(@today.used_today, 1)}</span>
+                </div>
+              </div>
+              <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+                <div class="text-purple-200 mb-2 font-semibold">Exercise Minutes (Total)</div>
+                <div class="text-2xl font-bold">{Float.round(@today.exercise_minutes, 1)}</div>
+              </div>
+            </div>
+          <% else %>
+            <div class="animate-pulse">
+              <div class="flex items-baseline gap-3 mb-6">
+                <span class="text-7xl font-black text-white/40">···</span>
+                <span class="text-3xl font-semibold text-purple-200">minutes</span>
+              </div>
+
+              <div class="grid md:grid-cols-2 gap-4 text-sm">
+                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
+                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
+              </div>
+            </div>
+          <% end %>
+        </div>
+
+        <%!-- Decorative Elements --%>
+        <div class="absolute -top-20 -right-20 size-64 bg-purple-500/30 rounded-full blur-3xl">
+        </div>
+        <div class="absolute -bottom-20 -left-20 size-64 bg-indigo-500/30 rounded-full blur-3xl">
+        </div>
+      </div>
+
+      <%!-- Debug overlay: the all-time cumulative Play Balance breakdown,
+      revealed by triple-clicking the 🎮 icon on the Log Playtime card
+      below. Not persisted — resets to hidden on every mount. --%>
+      <%= if @show_debug do %>
+        <div
+          id="debug-overlay"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          phx-click-away="hide_debug"
+        >
+          <div class="relative w-full max-w-2xl rounded-3xl bg-gradient-to-br from-purple-600 via-purple-700 to-indigo-800 p-8 text-white shadow-2xl">
+            <button
+              type="button"
+              phx-click="hide_debug"
+              aria-label="Close"
+              class="absolute top-4 right-4 text-2xl font-bold text-white/80 hover:text-white"
+            >
+              &times;
+            </button>
+
+            <h1 class="text-4xl font-bold mb-2">Your Play Balance</h1>
+            <p class="text-purple-200 mb-6">Time you've earned to spend on fun!</p>
+
             <div class="flex items-baseline gap-3 mb-6">
               <span class="text-7xl font-black">{Float.round(@balance.total, 1)}</span>
               <span class="text-3xl font-semibold text-purple-200">minutes</span>
             </div>
 
-            <%!-- Progress Bar --%>
             <div class="relative h-6 bg-purple-900/40 rounded-full overflow-hidden mb-8 backdrop-blur-sm">
               <div
                 class={"absolute inset-y-0 left-0 rounded-full transition-all duration-1000 ease-out #{balance_gradient(@balance)}"}
@@ -40,7 +127,6 @@
               </div>
             </div>
 
-            <%!-- Balance Breakdown --%>
             <div class="grid grid-cols-3 gap-4 text-sm">
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
                 <div class="text-purple-200 mb-1">Earned (Timing)</div>
@@ -59,37 +145,20 @@
                 </div>
               </div>
             </div>
-          <% else %>
-            <div class="animate-pulse">
-              <div class="flex items-baseline gap-3 mb-6">
-                <span class="text-7xl font-black text-white/40">···</span>
-                <span class="text-3xl font-semibold text-purple-200">minutes</span>
-              </div>
-
-              <div class="relative h-6 bg-purple-900/40 rounded-full overflow-hidden mb-8 backdrop-blur-sm">
-              </div>
-
-              <div class="grid grid-cols-3 gap-4 text-sm">
-                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
-                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
-                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
-              </div>
-            </div>
-          <% end %>
+          </div>
         </div>
-
-        <%!-- Decorative Elements --%>
-        <div class="absolute -top-20 -right-20 size-64 bg-purple-500/30 rounded-full blur-3xl">
-        </div>
-        <div class="absolute -bottom-20 -left-20 size-64 bg-indigo-500/30 rounded-full blur-3xl">
-        </div>
-      </div>
+      <% end %>
 
       <%!-- Quick Actions --%>
       <div class="grid md:grid-cols-2 gap-6">
         <%!-- Log Playtime Used --%>
         <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-orange-200">
-          <h2 class="text-2xl font-bold text-gray-900 mb-4">🎮 Log Playtime</h2>
+          <h2 class="text-2xl font-bold text-gray-900 mb-4">
+            <span id="debug-trigger" phx-hook=".DebugTrigger" class="cursor-pointer select-none">
+              🎮
+            </span>
+            Log Playtime
+          </h2>
           <p class="text-gray-600 mb-4 text-sm">
             Used some playtime gaming or relaxing? Log it here!
           </p>

@@ -11,6 +11,7 @@ defmodule TimingPlayTime.PlayBalance do
   """
 
   alias TimingPlayTime.LocalDay
+  alias TimingPlayTime.PlaytimeUsed
 
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
   @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
@@ -88,6 +89,65 @@ defmodule TimingPlayTime.PlayBalance do
 
   defp later(a, b) do
     if DateTime.compare(a, b) == :gt, do: a, else: b
+  end
+
+  @doc """
+  Computes the dashboard's day-scoped "Playtime" figure: today's Timing-earned
+  Play Minutes plus today's Playtime Used, minus all-time Exercise Minutes
+  (Manual Sync, which can't be day-scoped — see `TimingPlayTime.PlaytimeUsed.total_used_today/3`).
+
+  Unlike `compute/2`, this does not accumulate indefinitely — it resets to
+  just today's activity every local calendar day, and every field can be
+  negative (no clamping): a User can log more Playtime Used today than
+  they've earned today.
+
+  ## Examples
+
+      iex> PlayBalance.compute_today(user)
+      {:ok, %{
+        earned_today: 27.5,
+        used_today: 10.0,
+        exercise_minutes: 15.0,
+        today_net: 17.5,
+        playtime: 32.5
+      }}
+  """
+  def compute_today(
+        user,
+        now \\ DateTime.utc_now(),
+        time_source_opts \\ [],
+        get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
+      ) do
+    with {:ok, activities} <- @persistence.list_activities(user.id),
+         {:ok, earned_today} <-
+           sum_today_earned(activities, user, now, time_source_opts, get_elapsed_minutes),
+         {:ok, exercise_minutes} <- get_manual_sync_total(user),
+         {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now) do
+      today_net = earned_today - used_today
+
+      {:ok,
+       %{
+         earned_today: earned_today,
+         used_today: used_today,
+         exercise_minutes: exercise_minutes,
+         today_net: today_net,
+         playtime: today_net + exercise_minutes
+       }}
+    end
+  end
+
+  defp sum_today_earned(activities, user, now, time_source_opts, get_elapsed_minutes) do
+    wrapped = fn activity, opts -> get_elapsed_minutes.(activity, opts ++ time_source_opts) end
+
+    total =
+      Enum.reduce(activities, 0.0, fn activity, acc ->
+        case today_activity_minutes(activity, user, now, wrapped) do
+          {:ok, %{play_minutes: play_minutes}} -> acc + play_minutes
+          {:error, _reason} -> acc
+        end
+      end)
+
+    {:ok, total}
   end
 
   # Private functions
