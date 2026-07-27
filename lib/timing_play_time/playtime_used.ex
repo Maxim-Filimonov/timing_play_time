@@ -78,4 +78,27 @@ defmodule TimingPlayTime.PlaytimeUsed do
       {:ok, total}
     end
   end
+
+  @doc """
+  Gets the sum of a user's playtime used logged before today (the local
+  calendar day, per `timezone` / ADR-0005) — the complement of
+  `total_used_today/3`, feeding the Reserve figure.
+
+  ## Examples
+
+      iex> total_used_before_today(user.id, "Pacific/Auckland")
+      {:ok, 120.0}
+  """
+  def total_used_before_today(user_id, timezone, now \\ DateTime.utc_now()) do
+    start_of_today = LocalDay.start_of_today(timezone, now)
+
+    with {:ok, usages} <- list_all(user_id) do
+      total =
+        usages
+        |> Enum.filter(&(DateTime.compare(&1.logged_at, start_of_today) == :lt))
+        |> Enum.reduce(0.0, fn usage, acc -> acc + usage.minutes end)
+
+      {:ok, total}
+    end
+  end
 end

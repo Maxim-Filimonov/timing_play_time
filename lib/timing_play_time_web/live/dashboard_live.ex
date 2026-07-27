@@ -279,6 +279,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     used_today: 0.0,
     exercise_minutes: 0.0,
     today_net: 0.0,
+    reserve: 0.0,
     playtime: 0.0
   }
 

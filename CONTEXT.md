@@ -34,5 +34,14 @@ A logged expenditure of Play Minutes (minutes + timestamp), decrementing the Pla
 _Avoid_: Spend, consumption
 
 **Play Balance**:
-The current total available to spend: Timing-Derived Earned Total + Manual Sync − sum of Playtime Used. Accumulates indefinitely for now (a future cap is a known possibility, not yet designed).
+The current total available to spend: Timing-Derived Earned Total + Manual Sync − sum of Playtime Used. Accumulates indefinitely for now (a future cap is a known possibility, not yet designed). Shown only behind a debug-only reveal on the dashboard (triple-tap the joystick icon) — the primary hero figure is Playtime, below. Always equal to Playtime's Today's PT + Reserve — a pure decomposition of the same total, nothing added or dropped.
 _Avoid_: Balance (ambiguous outside this context), credit
+
+**Playtime**:
+The dashboard's primary hero figure: Today's PT + Reserve. Unclamped — can go negative if usage has outpaced earnings. Distinct from Play Balance (above), which is the same total computed a different way and normally hidden.
+
+**Today's PT**:
+The "today" component of Playtime: today's Timing-Derived Earned Total (local calendar day, per [ADR-0005](docs/adr/0005-local-timezone-for-day-boundaries.md)) minus today's Playtime Used, plus all-time Exercise Minutes. Exercise Minutes is folded in here rather than into Reserve because Manual Sync has no day boundary of its own to split by.
+
+**Reserve**:
+Play Minutes earned but not yet spent from days *before* today: prior-days' Timing-Derived Earned Total minus prior-days' Playtime Used. Unclamped (can go negative). Excludes Exercise Minutes entirely (see Today's PT). Shown as its own dashboard widget, separate from Today's PT, so today's activity and carried-over history stay visually distinguishable even though they combine into a single spendable Playtime number.

@@ -105,6 +105,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ "Earned Today"
     assert html =~ "Used Today"
     assert html =~ "Exercise Minutes (Total)"
+    assert html =~ "Reserve"
     refute html =~ "Your Play Balance"
   end
 

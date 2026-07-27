@@ -84,4 +84,27 @@ defmodule TimingPlayTime.PlaytimeUsedTest do
       assert total == 25.5
     end
   end
+
+  describe "total_used_before_today/3" do
+    test "returns 0.0 when no usage logged", %{user_id: user_id} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:ok, total} = PlaytimeUsed.total_used_before_today(user_id, "Pacific/Auckland", now)
+      assert total == 0.0
+    end
+
+    test "includes an entry from before local start-of-day, excludes one from today", %{
+      user_id: user_id
+    } do
+      # Local (Pacific/Auckland, NZST/UTC+12) start of today is 2026-07-24T12:00:00Z.
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 999.0, ~U[2026-07-24 11:00:00Z])
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 20.0, ~U[2026-07-24 12:00:00Z])
+      {:ok, _} = PlaytimeUsed.log_usage(user_id, 5.5, ~U[2026-07-25 09:00:00Z])
+
+      assert {:ok, total} = PlaytimeUsed.total_used_before_today(user_id, "Pacific/Auckland", now)
+      assert total == 999.0
+    end
+  end
 end

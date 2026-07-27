@@ -186,7 +186,10 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.used_today == 30.0
       assert today.exercise_minutes == 10.0
       assert_in_delta today.today_net, today.earned_today - 30.0, 0.001
-      assert_in_delta today.playtime, today.today_net + 10.0, 0.001
+      # Prior-days earned (from Activated At to local start-of-today) minus
+      # prior-days used (999.0, logged before local start-of-today).
+      assert_in_delta today.reserve, 1116.0, 0.01
+      assert_in_delta today.playtime, today.today_net + 10.0 + today.reserve, 0.001
     end
 
     test "skips an activity whose get_elapsed_minutes call fails, rather than failing the whole computation",
@@ -231,7 +234,23 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.earned_today == 0.0
       assert today.used_today == 100.0
       assert today.today_net == -100.0
+      assert today.reserve == 0.0
       assert today.playtime == -95.0
+    end
+
+    test "reserve goes negative when prior-days' Playtime Used exceeds prior-days' earnings, independent of today's activity",
+         %{user: user} do
+      # No Activities at all, so earned is 0.0 both cumulatively and today —
+      # isolates Reserve's sign to just the prior-days Playtime Used below.
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 50.0, ~U[2026-07-24 11:00:00Z])
+
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now)
+
+      assert today.today_net == 0.0
+      assert today.reserve == -50.0
+      assert today.playtime == -50.0
     end
   end
 end

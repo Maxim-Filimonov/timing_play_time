@@ -52,7 +52,7 @@
               <span class="text-3xl font-semibold text-purple-200">minutes</span>
             </div>
 
-            <div class="grid md:grid-cols-2 gap-4 text-sm">
+            <div class="grid md:grid-cols-3 gap-4 text-sm">
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
                 <div class="text-purple-200 mb-2 font-semibold">Today's</div>
                 <div class="flex justify-between">
@@ -68,6 +68,12 @@
                 <div class="text-purple-200 mb-2 font-semibold">Exercise Minutes (Total)</div>
                 <div class="text-2xl font-bold">{Float.round(@today.exercise_minutes, 1)}</div>
               </div>
+              <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+                <div class="text-purple-200 mb-2 font-semibold">Reserve</div>
+                <div class={"text-2xl font-bold #{if @today.reserve < 0, do: "text-red-300"}"}>
+                  {Float.round(@today.reserve, 1)}
+                </div>
+              </div>
             </div>
           <% else %>
             <div class="animate-pulse">
@@ -76,7 +82,8 @@
                 <span class="text-3xl font-semibold text-purple-200">minutes</span>
               </div>
 
-              <div class="grid md:grid-cols-2 gap-4 text-sm">
+              <div class="grid md:grid-cols-3 gap-4 text-sm">
+                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
                 <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
                 <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
               </div>
