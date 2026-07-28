@@ -97,7 +97,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
         socket =
           socket
           |> load_balance()
-          |> put_flash(:info, "Exercise minutes set to #{minutes} minutes!")
+          |> put_flash(:info, "Pushscroll Balance set to #{minutes} minutes!")
 
         {:noreply, socket}
 
@@ -277,7 +277,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   @empty_today %{
     earned_today: 0.0,
     used_today: 0.0,
-    exercise_minutes: 0.0,
+    pushscroll_balance: 0.0,
     today_net: 0.0,
     reserve: 0.0,
     playtime: 0.0

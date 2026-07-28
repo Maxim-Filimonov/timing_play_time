@@ -162,7 +162,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
   end
 
   describe "compute_today/3" do
-    test "sums today's earned Play Minutes and today's used minutes, plus all-time Exercise Minutes",
+    test "sums today's earned Play Minutes and today's used minutes; folds Pushscroll Balance into Reserve",
          %{user: user} do
       {:ok, _activity} =
         PersistenceStub.create_activity(user.id, %{
@@ -184,12 +184,13 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert_in_delta today.earned_today, 45.0 * (22 / 24) * 2.0, 0.01
       assert today.used_today == 30.0
-      assert today.exercise_minutes == 10.0
+      assert today.pushscroll_balance == 10.0
       assert_in_delta today.today_net, today.earned_today - 30.0, 0.001
       # Prior-days earned (from Activated At to local start-of-today) minus
-      # prior-days used (999.0, logged before local start-of-today).
-      assert_in_delta today.reserve, 1116.0, 0.01
-      assert_in_delta today.playtime, today.today_net + 10.0 + today.reserve, 0.001
+      # prior-days used (999.0, logged before local start-of-today), plus
+      # Pushscroll Balance (10.0).
+      assert_in_delta today.reserve, 1126.0, 0.01
+      assert_in_delta today.playtime, today.today_net + today.reserve, 0.001
     end
 
     test "skips an activity whose get_elapsed_minutes call fails, rather than failing the whole computation",
@@ -234,7 +235,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.earned_today == 0.0
       assert today.used_today == 100.0
       assert today.today_net == -100.0
-      assert today.reserve == 0.0
+      assert today.reserve == 5.0
       assert today.playtime == -95.0
     end
 

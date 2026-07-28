@@ -65,14 +65,14 @@
                 </div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-                <div class="text-purple-200 mb-2 font-semibold">Exercise Minutes (Total)</div>
-                <div class="text-2xl font-bold">{Float.round(@today.exercise_minutes, 1)}</div>
-              </div>
-              <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
                 <div class="text-purple-200 mb-2 font-semibold">Reserve</div>
                 <div class={"text-2xl font-bold #{if @today.reserve < 0, do: "text-red-300"}"}>
                   {Float.round(@today.reserve, 1)}
                 </div>
+              </div>
+              <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+                <div class="text-purple-200 mb-2 font-semibold">Pushscroll Balance</div>
+                <div class="text-2xl font-bold">{Float.round(@today.pushscroll_balance, 1)}</div>
               </div>
             </div>
           <% else %>
@@ -142,7 +142,7 @@
                 </div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
-                <div class="text-purple-200 mb-1">Exercise Minutes</div>
+                <div class="text-purple-200 mb-1">Pushscroll Balance</div>
                 <div class="text-2xl font-bold">{Float.round(@balance.manual_sync_total, 1)}</div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
@@ -192,11 +192,11 @@
           </form>
         </div>
 
-        <%!-- Exercise Minutes --%>
+        <%!-- Pushscroll Balance --%>
         <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-green-200">
-          <h2 class="text-2xl font-bold text-gray-900 mb-4">🏃 Exercise Minutes</h2>
+          <h2 class="text-2xl font-bold text-gray-900 mb-4">🏃 Pushscroll Balance</h2>
           <p class="text-gray-600 mb-4 text-sm">
-            Update your exercise minutes from external apps
+            Net balance from Pushscroll — rises when you exercise, falls when you spend it on tracked apps.
           </p>
 
           <form phx-submit="set_manual_sync" class="space-y-4">
@@ -217,7 +217,7 @@
               type="submit"
               class="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white font-bold py-3 px-6 rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
             >
-              Update Exercise Minutes
+              Update Pushscroll Balance
             </button>
           </form>
         </div>

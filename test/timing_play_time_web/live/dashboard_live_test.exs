@@ -26,7 +26,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert Accounts.get_user(user_id)
   end
 
-  test "shows today's minutes and Play Minutes per Activity, and labels Manual Sync as Exercise Minutes",
+  test "shows today's minutes and Play Minutes per Activity, and labels Manual Sync as Pushscroll Balance",
        %{conn: conn, user: user} do
     {:ok, _activity} =
       PersistenceStub.create_activity(user.id, %{
@@ -41,7 +41,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ "Coding"
     assert html =~ "Today:"
     assert html =~ "play min"
-    assert html =~ "Exercise Minutes"
+    assert html =~ "Pushscroll Balance"
     refute html =~ "Manual Sync"
   end
 
@@ -70,7 +70,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     refute html =~ "TheirActivity"
   end
 
-  test "setting exercise minutes flashes the new copy", %{conn: conn} do
+  test "setting the Pushscroll Balance flashes the new copy", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
     html =
@@ -78,7 +78,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
       |> form("form[phx-submit=set_manual_sync]", %{"minutes" => "42"})
       |> render_submit()
 
-    assert html =~ "Exercise minutes set to 42.0 minutes!"
+    assert html =~ "Pushscroll Balance set to 42.0 minutes!"
   end
 
   test "links to the settings page", %{conn: conn} do
@@ -104,7 +104,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ "Playtime"
     assert html =~ "Earned Today"
     assert html =~ "Used Today"
-    assert html =~ "Exercise Minutes (Total)"
+    assert html =~ "Pushscroll Balance"
     assert html =~ "Reserve"
     refute html =~ "Your Play Balance"
   end

@@ -93,21 +93,26 @@ defmodule TimingPlayTime.PlayBalance do
 
   @doc """
   Computes the dashboard's "Playtime" figure: Today's PT (today's
-  Timing-earned Play Minutes, minus today's Playtime Used, plus all-time
-  Exercise Minutes — Manual Sync can't be day-scoped, see
-  `TimingPlayTime.PlaytimeUsed.total_used_today/3`) plus Reserve (Play
-  Minutes earned but not yet spent from days *before* today).
+  Timing-earned Play Minutes, minus today's Playtime Used — resets every
+  local calendar day, no exceptions) plus Reserve (Play Minutes earned but
+  not yet spent from days *before* today, plus the Pushscroll Balance).
+
+  Pushscroll Balance has no day boundary of its own — it's a net balance
+  synced from an external app (rises when the User exercises, falls when
+  they spend it on Pushscroll-tracked apps) — so it's folded into Reserve
+  rather than Today's PT, alongside the rest of the carried-over history.
 
   `reserve` is derived as (cumulative Timing-Derived Earned Total minus
-  today's earned) minus prior-days' Playtime Used — a pure decomposition, so
-  `playtime` always equals what `compute/2` would return as `:total` for the
-  same activity, just split into a today part and a carried-over part.
+  today's earned) minus prior-days' Playtime Used, plus Pushscroll Balance —
+  a pure decomposition, so `playtime` always equals what `compute/2` would
+  return as `:total` for the same activity, just split into a today part and
+  a carried-over part.
 
   Unlike `compute/2`, `earned_today`/`today_net` reset to just today's
   activity every local calendar day; `reserve` is where the rest of the
-  history lives instead of disappearing. Every field can go negative (no
-  clamping) — a User can log more Playtime Used than they've earned, either
-  today or historically.
+  history (and the synced Pushscroll Balance) lives instead of
+  disappearing. Every field can go negative (no clamping) — a User can log
+  more Playtime Used than they've earned, either today or historically.
 
   ## Examples
 
@@ -115,10 +120,10 @@ defmodule TimingPlayTime.PlayBalance do
       {:ok, %{
         earned_today: 27.5,
         used_today: 10.0,
-        exercise_minutes: 15.0,
+        pushscroll_balance: 15.0,
         today_net: 17.5,
         reserve: 42.0,
-        playtime: 74.5
+        playtime: 59.5
       }}
   """
   def compute_today(
@@ -132,21 +137,21 @@ defmodule TimingPlayTime.PlayBalance do
     with {:ok, activities} <- @persistence.list_activities(user.id),
          {:ok, earned_today} <- sum_today_earned(activities, user, now, wrapped),
          {:ok, earned_cumulative} <- sum_cumulative_earned(activities, now, wrapped),
-         {:ok, exercise_minutes} <- get_manual_sync_total(user),
+         {:ok, pushscroll_balance} <- get_manual_sync_total(user),
          {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now),
          {:ok, used_before_today} <-
            PlaytimeUsed.total_used_before_today(user.id, user.timezone, now) do
       today_net = earned_today - used_today
-      reserve = earned_cumulative - earned_today - used_before_today
+      reserve = earned_cumulative - earned_today - used_before_today + pushscroll_balance
 
       {:ok,
        %{
          earned_today: earned_today,
          used_today: used_today,
-         exercise_minutes: exercise_minutes,
+         pushscroll_balance: pushscroll_balance,
          today_net: today_net,
          reserve: reserve,
-         playtime: today_net + exercise_minutes + reserve
+         playtime: today_net + reserve
        }}
     end
   end
