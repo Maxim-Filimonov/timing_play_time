@@ -40,7 +40,10 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
     assert html =~ "Coding"
     assert html =~ "Today:"
-    assert html =~ "play min"
+    # Play Minutes is abbreviated as "min" under an hour, "hr" at/over an
+    # hour (see TimingPlayTimeWeb.Components.TimeDisplay) — either is valid
+    # here since the stub time source's output varies with time of day.
+    assert html =~ ~r/play\s*<span/
     assert html =~ "Pushscroll Balance"
     refute html =~ "Manual Sync"
   end

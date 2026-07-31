@@ -81,6 +81,7 @@ defmodule TimingPlayTimeWeb do
       import Phoenix.HTML
       # Core UI components
       import TimingPlayTimeWeb.CoreComponents
+      import TimingPlayTimeWeb.Components.TimeDisplay
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS
