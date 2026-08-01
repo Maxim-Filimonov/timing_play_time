@@ -26,6 +26,23 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert Accounts.get_user(user_id)
   end
 
+  test "renders with zero Today figures, rather than crashing, for a User with no timezone configured yet" do
+    {:ok, user} = Accounts.create_user()
+    conn = Phoenix.ConnTest.build_conn() |> log_in_user(user)
+
+    {:ok, _activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 2.0,
+        activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    assert html =~ "Coding"
+  end
+
   test "shows today's minutes and Play Minutes per Activity, and labels Manual Sync as Pushscroll Balance",
        %{conn: conn, user: user} do
     {:ok, _activity} =

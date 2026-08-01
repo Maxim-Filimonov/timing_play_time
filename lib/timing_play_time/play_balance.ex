@@ -44,10 +44,12 @@ defmodule TimingPlayTime.PlayBalance do
         time_source_opts \\ [],
         get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
       ) do
-    with {:ok, timing_derived} <-
-           compute_timing_derived_total(user, time_source_opts, get_elapsed_minutes),
+    with {:ok, activities} <- @persistence.list_activities(user.id),
          {:ok, manual_sync} <- get_manual_sync_total(user),
          {:ok, playtime_used} <- get_playtime_used_total(user) do
+      timing_derived =
+        compute_timing_derived_total(activities, time_source_opts, get_elapsed_minutes)
+
       balance = %{
         timing_derived_total: timing_derived,
         manual_sync_total: manual_sync,
@@ -64,11 +66,11 @@ defmodule TimingPlayTime.PlayBalance do
   (the user's local calendar day, per `user.timezone` / ADR-0006), for the
   dashboard's per-Activity breakdown.
 
-  `from` is the later of local start-of-today and the local start-of-day
-  containing the Activity's Activated At — so an Activity activated later
-  today still counts entries logged earlier that same local day (matching
-  the Timing-Derived Earned Total's day-boundary parity), while an Activity
-  activated on an earlier day is clamped to just today.
+  Entries are counted from local start-of-today onward regardless of when
+  the Activity was activated — an Activity activated earlier is clamped to
+  just today, and one activated later today still counts entries logged
+  earlier that same local day, since local start-of-today never falls after
+  the local day containing its own Activated At.
 
   ## Examples
 
@@ -81,19 +83,12 @@ defmodule TimingPlayTime.PlayBalance do
         now \\ DateTime.utc_now(),
         get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
       ) do
-    from =
-      later(
-        LocalDay.start_of_today(user.timezone, activity.activated_at),
-        LocalDay.start_of_today(user.timezone, now)
-      )
+    today_from = LocalDay.start_of_today(user.timezone, now)
 
-    with {:ok, minutes} <- get_elapsed_minutes.(activity, from: from, to: now) do
+    with {:ok, totals} <- get_elapsed_minutes.([activity], to: now, today_from: today_from) do
+      minutes = minutes_for(totals, activity, :today)
       {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
     end
-  end
-
-  defp later(a, b) do
-    if DateTime.compare(a, b) == :gt, do: a, else: b
   end
 
   @doc """
@@ -137,15 +132,19 @@ defmodule TimingPlayTime.PlayBalance do
         time_source_opts \\ [],
         get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
       ) do
-    wrapped = fn activity, opts -> get_elapsed_minutes.(activity, opts ++ time_source_opts) end
+    today_from = LocalDay.start_of_today(user.timezone, now)
 
     with {:ok, activities} <- @persistence.list_activities(user.id),
-         {:ok, earned_today} <- sum_today_earned(activities, user, now, wrapped),
-         {:ok, earned_cumulative} <- sum_cumulative_earned(activities, now, wrapped),
          {:ok, pushscroll_balance} <- get_manual_sync_total(user),
          {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now),
          {:ok, used_before_today} <-
            PlaytimeUsed.total_used_before_today(user.id, user.timezone, now) do
+      opts = [to: now, today_from: today_from] ++ time_source_opts
+      totals = fetch_totals(activities, opts, get_elapsed_minutes)
+
+      earned_today = sum_totals(activities, totals, :today)
+      earned_cumulative = sum_totals(activities, totals, :cumulative)
+
       today_net = earned_today - used_today
       reserve = earned_cumulative - earned_today - used_before_today + pushscroll_balance
 
@@ -161,47 +160,33 @@ defmodule TimingPlayTime.PlayBalance do
     end
   end
 
-  defp sum_today_earned(activities, user, now, get_elapsed_minutes) do
-    total =
-      Enum.reduce(activities, 0.0, fn activity, acc ->
-        case today_activity_minutes(activity, user, now, get_elapsed_minutes) do
-          {:ok, %{play_minutes: play_minutes}} -> acc + play_minutes
-          {:error, _reason} -> acc
-        end
-      end)
-
-    {:ok, total}
-  end
-
-  defp sum_cumulative_earned(activities, now, get_elapsed_minutes) do
-    total =
-      Enum.reduce(activities, 0.0, fn activity, acc ->
-        case get_elapsed_minutes.(activity, to: now) do
-          {:ok, minutes} -> acc + minutes * activity.multiplier
-          {:error, _reason} -> acc
-        end
-      end)
-
-    {:ok, total}
-  end
-
   # Private functions
 
-  defp compute_timing_derived_total(user, time_source_opts, get_elapsed_minutes) do
-    with {:ok, activities} <- @persistence.list_activities(user.id) do
-      total =
-        Enum.reduce(activities, 0.0, fn activity, acc ->
-          case get_elapsed_minutes.(activity, time_source_opts) do
-            {:ok, minutes} ->
-              acc + minutes * activity.multiplier
+  defp compute_timing_derived_total(activities, time_source_opts, get_elapsed_minutes) do
+    totals = fetch_totals(activities, time_source_opts, get_elapsed_minutes)
+    sum_totals(activities, totals, :cumulative)
+  end
 
-            {:error, _reason} ->
-              # Skip activities that fail to retrieve time
-              acc
-          end
-        end)
+  # A single Timing fetch failure zeroes every Activity's totals for this
+  # computation (ADR-0008's accepted shared failure blast radius) rather
+  # than isolating the failure to just one Activity.
+  defp fetch_totals(activities, time_source_opts, get_elapsed_minutes) do
+    case get_elapsed_minutes.(activities, time_source_opts) do
+      {:ok, totals} -> totals
+      {:error, _reason} -> %{}
+    end
+  end
 
-      {:ok, total}
+  defp sum_totals(activities, totals, key) do
+    Enum.reduce(activities, 0.0, fn activity, acc ->
+      acc + minutes_for(totals, activity, key) * activity.multiplier
+    end)
+  end
+
+  defp minutes_for(totals, activity, key) do
+    case Map.fetch(totals, activity.time_source_identifier) do
+      {:ok, %{^key => minutes}} when is_number(minutes) -> minutes
+      _ -> 0.0
     end
   end
 

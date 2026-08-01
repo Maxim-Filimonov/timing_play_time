@@ -4,6 +4,9 @@ defmodule TimingPlayTime.Support.TimingMockHandler do
   MCP server, used to test `TimingPlayTime.Plugins.TimeSource.Timing`.
   """
 
+  # Mirrors the real Timing server's documented single-page cap.
+  @page_size_limit 1000
+
   def call_tool(tool_name, arguments, state) do
     if pid = state[:test_pid], do: send(pid, {:call_tool, tool_name, arguments})
 
@@ -15,7 +18,12 @@ defmodule TimingPlayTime.Support.TimingMockHandler do
         %{"content" => [%{"type" => "text", "text" => state.raw_text}]}
 
       true ->
-        entries = filter_by_date_range(state[:entries] || [], arguments)
+        entries =
+          state[:entries]
+          |> Kernel.||([])
+          |> filter_by_date_range(arguments)
+          |> sort_desc_by_start_date()
+          |> Enum.take(@page_size_limit)
 
         %{
           "content" => [
@@ -48,6 +56,21 @@ defmodule TimingPlayTime.Support.TimingMockHandler do
         start_date ->
           entry_dt = parse_datetime(start_date)
           not_before?(entry_dt, min) and not_after?(entry_dt, max)
+      end
+    end)
+  end
+
+  # Mirrors the real server's descending-by-start_date ordering, so a page
+  # capped at @page_size_limit drops the oldest entries first — exactly what
+  # the adapter's backward pagination needs to walk through. Entries without
+  # a "start_date" sort last among themselves, arbitrarily.
+  defp sort_desc_by_start_date(entries) do
+    Enum.sort(entries, fn a, b ->
+      case {parse_datetime(a["start_date"]), parse_datetime(b["start_date"])} do
+        {nil, nil} -> true
+        {nil, _} -> false
+        {_, nil} -> true
+        {da, db} -> DateTime.compare(da, db) != :lt
       end
     end)
   end

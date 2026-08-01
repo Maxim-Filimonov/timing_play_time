@@ -269,17 +269,13 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     end
   end
 
-  # Both `load_balance` and `load_activities` independently ask for each
-  # Activity's cumulative-since-activation and today-scoped elapsed minutes
-  # (compute_timing_derived_total / sum_cumulative_earned want the former,
-  # sum_today_earned / with_today_minutes want the latter) — without sharing
-  # a fetcher, that's 4 real Timing MCP round-trips per Activity per mount
-  # or refresh tick, sequential and slow enough to blow past the LiveView
-  # longpoll transport's 10s reply window and drop the connection ("Something
-  # went wrong! Attempting to reconnect"). `fetch_activities_and_fetcher/1`
-  # fetches both ranges once up front and hands every caller in this
-  # pipeline a pure lookup, so each Activity is only actually queried twice
-  # (cumulative + today), not four times.
+  # `load_balance`, `load_today` (via `PlayBalance.compute_today`), and
+  # `load_activities` each want elapsed-minutes data for every Activity —
+  # without sharing a fetcher, that's a separate call per caller. The
+  # `TimeSource` contract fetches every given Activity's cumulative and
+  # today-scoped totals in one shot (ADR-0008), so
+  # `fetch_activities_and_fetcher/1` makes that one real call up front and
+  # hands every caller in this pipeline a memoized lookup instead.
   defp refresh_timing_data(socket) do
     {activities, get_elapsed_minutes} = fetch_activities_and_fetcher(socket)
 
@@ -386,61 +382,23 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     {activities, prefetched_get_elapsed_minutes(activities, user, now, time_source_opts)}
   end
 
-  # Fetches each Activity's cumulative-since-activation and today-scoped
-  # elapsed minutes exactly once (the two logically distinct ranges every
-  # caller in this module ever asks for), then hands back a pure lookup
-  # function so downstream callers (PlayBalance.compute/3,
-  # PlayBalance.compute_today/4, with_today_minutes/3) don't each trigger
-  # their own Timing MCP round-trip for data already fetched here.
-  defp prefetched_get_elapsed_minutes(activities, %{timezone: nil}, _now, time_source_opts) do
-    totals =
-      Map.new(activities, fn activity ->
-        cumulative = @time_source.get_elapsed_minutes(activity, time_source_opts)
-
-        {activity.time_source_identifier,
-         %{cumulative: cumulative, today: {:error, :no_timezone}}}
-      end)
-
-    lookup_elapsed_minutes(totals)
-  end
-
+  # Fetches every given Activity's cumulative and today-scoped elapsed
+  # minutes in the one real call the `TimeSource` contract makes for a whole
+  # Activity list (ADR-0008), then hands back a lookup function that ignores
+  # whatever it's called with and just returns that cached result — so
+  # downstream callers (PlayBalance.compute/3, PlayBalance.compute_today/4,
+  # with_today_minutes/3) share the single fetch instead of each triggering
+  # their own.
   defp prefetched_get_elapsed_minutes(activities, user, now, time_source_opts) do
-    totals =
-      Map.new(activities, fn activity ->
-        cumulative = @time_source.get_elapsed_minutes(activity, [to: now] ++ time_source_opts)
-        today_from = today_start(activity, user, now)
+    today_from = today_from(user, now)
+    opts = [to: now, today_from: today_from] ++ time_source_opts
+    result = @time_source.get_elapsed_minutes(activities, opts)
 
-        today =
-          @time_source.get_elapsed_minutes(
-            activity,
-            [from: today_from, to: now] ++ time_source_opts
-          )
-
-        {activity.time_source_identifier, %{cumulative: cumulative, today: today}}
-      end)
-
-    lookup_elapsed_minutes(totals)
+    fn _activities, _opts -> result end
   end
 
-  defp lookup_elapsed_minutes(totals) do
-    fn activity, opts ->
-      case {Map.fetch(totals, activity.time_source_identifier), Keyword.has_key?(opts, :from)} do
-        {{:ok, %{today: result}}, true} -> result
-        {{:ok, %{cumulative: result}}, false} -> result
-        {:error, _wants_from?} -> {:error, :not_prefetched}
-      end
-    end
-  end
-
-  # Mirrors PlayBalance.today_activity_minutes/4's own "from" cutoff — the
-  # later of local start-of-today and the local start-of-day containing the
-  # Activity's Activated At — so a prefetched value here matches exactly
-  # what that function would have queried for itself.
-  defp today_start(activity, user, now) do
-    today = LocalDay.start_of_today(user.timezone, now)
-    activated_day = LocalDay.start_of_today(user.timezone, activity.activated_at)
-    if DateTime.compare(activated_day, today) == :gt, do: activated_day, else: today
-  end
+  defp today_from(%{timezone: nil}, _now), do: nil
+  defp today_from(user, now), do: LocalDay.start_of_today(user.timezone, now)
 
   defp balance_percentage(%{total: total}) when total >= 200, do: 100
   defp balance_percentage(%{total: total}), do: min(100, round(total / 2))

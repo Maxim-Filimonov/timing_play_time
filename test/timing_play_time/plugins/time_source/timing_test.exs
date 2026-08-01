@@ -5,9 +5,14 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
   alias TimingPlayTime.Plugins.TimeSource.Timing
   alias TimingPlayTime.Support.TimingMockHandler
 
-  @activity %{
+  @coding %{
     time_source_identifier: "coding-proj-1",
     activated_at: ~U[2026-07-01 14:32:07Z]
+  }
+
+  @learning %{
+    time_source_identifier: "learning-proj-1",
+    activated_at: ~U[2026-07-10 03:00:00Z]
   }
 
   # connect/1 isn't exercised here: it dials the real @mcp_url via
@@ -18,47 +23,37 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
   # today.
 
   describe "get_elapsed_minutes/2" do
+    test "returns {:ok, %{}} without calling the client when given no activities" do
+      assert {:ok, %{}} = Timing.get_elapsed_minutes([], client: :unused)
+    end
+
     test "returns :not_connected when no client is given" do
-      assert {:error, :not_connected} = Timing.get_elapsed_minutes(@activity, [])
+      assert {:error, :not_connected} = Timing.get_elapsed_minutes([@coding], [])
     end
 
-    test "sums entry durations (seconds) into minutes" do
-      entries = [%{"duration" => 1800}, %{"duration" => 900}]
-
-      MockServer.with_server(
-        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
-        fn client ->
-          assert {:ok, 45.0} = Timing.get_elapsed_minutes(@activity, client: client)
-        end
-      )
-    end
-
-    test "sends the activity's time source identifier and given date range as tool arguments" do
+    test "sends every given activity's identifier as the requested projects, in one call" do
       MockServer.with_server(
         [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
         fn client ->
-          from = ~U[2026-06-01 00:00:00Z]
-          to = ~U[2026-06-15 00:00:00Z]
-
-          assert {:ok, minutes} =
-                   Timing.get_elapsed_minutes(@activity, client: client, from: from, to: to)
-
-          assert minutes == 0.0
+          assert {:ok, _totals} =
+                   Timing.get_elapsed_minutes([@coding, @learning], client: client)
 
           assert_receive {:call_tool, "list_time_entries", arguments}
-          assert arguments["projects"] == ["coding-proj-1"]
-          assert arguments["start_date_min"] == DateTime.to_iso8601(from)
-          assert arguments["start_date_max"] == DateTime.to_iso8601(to)
+          assert arguments["projects"] == ["coding-proj-1", "learning-proj-1"]
+          refute_receive {:call_tool, "list_time_entries", _}
         end
       )
     end
 
-    test "defaults :from to the beginning of the day the activity was activated" do
+    test "defaults start_date_min to the beginning of the day of the earliest activated-at across all given activities" do
       MockServer.with_server(
         [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
         fn client ->
-          assert {:ok, minutes} = Timing.get_elapsed_minutes(@activity, client: client)
-          assert minutes == 0.0
+          # @coding (2026-07-01) is earlier than @learning (2026-07-10) — the
+          # shared cutoff is the earliest one, not each activity's own
+          # (ADR-0008).
+          assert {:ok, _totals} =
+                   Timing.get_elapsed_minutes([@learning, @coding], client: client)
 
           assert_receive {:call_tool, "list_time_entries", arguments}
           assert arguments["start_date_min"] == "2026-07-01T00:00:00Z"
@@ -66,42 +61,144 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
       )
     end
 
-    test "counts an entry started earlier today within a narrow same-day range" do
-      # Reproduces the "today" dashboard figure staying 0.0: from/to must be
-      # sent without microseconds (Timing's docs: use ISO8601 "without
-      # microseconds", e.g. "2019-01-01T00:00:00+00:00") or the real server's
-      # date-range filter can silently exclude everything in a narrow window.
-      entries = [%{"duration" => 1800, "start_date" => "2026-07-26T02:00:00+00:00"}]
-
+    test "sends the given :to (without microseconds) as start_date_max" do
       MockServer.with_server(
-        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
         fn client ->
-          # `from`/`to` carry microseconds, exactly as DateTime.utc_now() does
-          # in production — the real code must not pass these through as-is.
-          from = ~U[2026-07-26 00:00:00.000000Z]
           to = ~U[2026-07-26 10:00:00.123456Z]
 
-          assert {:ok, 30.0} =
-                   Timing.get_elapsed_minutes(@activity, client: client, from: from, to: to)
+          assert {:ok, _totals} = Timing.get_elapsed_minutes([@coding], client: client, to: to)
 
           assert_receive {:call_tool, "list_time_entries", arguments}
-          refute arguments["start_date_min"] =~ "."
+          assert arguments["start_date_max"] == "2026-07-26T10:00:00Z"
           refute arguments["start_date_max"] =~ "."
         end
       )
     end
 
-    test "excludes an entry from yesterday when querying a narrow same-day range" do
-      entries = [%{"duration" => 1800, "start_date" => "2026-07-25T23:00:00+00:00"}]
+    test "buckets entries back to each activity by matching the entry's prefixed project self against the bare requested identifier" do
+      entries = [
+        %{"duration" => 1800, "project" => %{"self" => "/projects/coding-proj-1"}},
+        %{"duration" => 600, "project" => %{"self" => "/projects/learning-proj-1"}},
+        %{"duration" => 300, "project" => %{"self" => "/projects/learning-proj-1"}}
+      ]
 
       MockServer.with_server(
         [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
         fn client ->
-          from = ~U[2026-07-26 00:00:00Z]
-          to = ~U[2026-07-26 10:00:00Z]
+          assert {:ok, totals} =
+                   Timing.get_elapsed_minutes([@coding, @learning], client: client)
 
-          assert {:ok, 0.0} =
-                   Timing.get_elapsed_minutes(@activity, client: client, from: from, to: to)
+          assert %{cumulative: 30.0, today: nil} = totals["coding-proj-1"]
+          assert %{cumulative: 15.0, today: nil} = totals["learning-proj-1"]
+        end
+      )
+    end
+
+    test "ignores an entry whose project doesn't match any given activity" do
+      entries = [
+        %{"duration" => 1800, "project" => %{"self" => "/projects/coding-proj-1"}},
+        %{"duration" => 9999, "project" => %{"self" => "/projects/some-other-project"}}
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          assert {:ok, totals} = Timing.get_elapsed_minutes([@coding], client: client)
+          assert %{cumulative: 30.0} = totals["coding-proj-1"]
+        end
+      )
+    end
+
+    test "returns a zeroed bucket for an activity with no matching entries" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
+        fn client ->
+          assert {:ok, totals} = Timing.get_elapsed_minutes([@coding], client: client)
+          assert %{cumulative: cumulative, today: nil} = totals["coding-proj-1"]
+          assert cumulative == 0.0
+        end
+      )
+    end
+
+    test "splits an activity's matched entries into cumulative (all) and today (at or after :today_from)" do
+      entries = [
+        %{
+          "duration" => 1800,
+          "project" => %{"self" => "/projects/coding-proj-1"},
+          "start_date" => "2026-07-25T10:00:00+00:00"
+        },
+        %{
+          "duration" => 600,
+          "project" => %{"self" => "/projects/coding-proj-1"},
+          "start_date" => "2026-07-26T02:00:00+00:00"
+        }
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          today_from = ~U[2026-07-26 00:00:00Z]
+
+          assert {:ok, totals} =
+                   Timing.get_elapsed_minutes([@coding],
+                     client: client,
+                     to: ~U[2026-07-26 10:00:00Z],
+                     today_from: today_from
+                   )
+
+          # cumulative counts both entries; today only the one at/after the cutoff.
+          assert %{cumulative: 40.0, today: 10.0} = totals["coding-proj-1"]
+        end
+      )
+    end
+
+    test "returns today: nil for every activity when :today_from isn't given" do
+      entries = [%{"duration" => 1800, "project" => %{"self" => "/projects/coding-proj-1"}}]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          assert {:ok, totals} = Timing.get_elapsed_minutes([@coding], client: client)
+          assert %{today: nil} = totals["coding-proj-1"]
+        end
+      )
+    end
+
+    test "paginates backward when a page returns the maximum of 1000 entries" do
+      base = ~U[2026-07-26 12:00:00Z]
+
+      # 1200 one-minute entries, one second apart, newest first — page one
+      # (capped at 1000 by the mock, mirroring the real server) covers the
+      # newest 1000; the adapter must re-query for the remaining 200 older
+      # ones instead of silently dropping them.
+      entries =
+        for i <- 0..1199 do
+          %{
+            "duration" => 60,
+            "project" => %{"self" => "/projects/coding-proj-1"},
+            "start_date" => base |> DateTime.add(-i, :second) |> DateTime.to_iso8601()
+          }
+        end
+
+      activity = %{@coding | activated_at: DateTime.add(base, -2, :day)}
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          assert {:ok, totals} =
+                   Timing.get_elapsed_minutes([activity], client: client, to: base)
+
+          assert_receive {:call_tool, "list_time_entries", first_args}
+          assert_receive {:call_tool, "list_time_entries", second_args}
+          refute_receive {:call_tool, "list_time_entries", _}
+
+          assert first_args["start_date_max"] == DateTime.to_iso8601(DateTime.truncate(base, :second))
+          assert second_args["start_date_max"] != first_args["start_date_max"]
+
+          # All 1200 minutes recovered across both pages, none dropped or
+          # double-counted at the pagination boundary.
+          assert %{cumulative: 1200.0} = totals["coding-proj-1"]
         end
       )
     end
@@ -111,7 +208,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
         [handler: TimingMockHandler, state: %{test_pid: self(), error: "boom"}],
         fn client ->
           assert {:error, {:tool_error, "boom"}} =
-                   Timing.get_elapsed_minutes(@activity, client: client)
+                   Timing.get_elapsed_minutes([@coding], client: client)
         end
       )
     end
@@ -121,7 +218,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
         [handler: TimingMockHandler, state: %{test_pid: self(), raw_text: "not json"}],
         fn client ->
           assert {:error, {:invalid_tool_result, _}} =
-                   Timing.get_elapsed_minutes(@activity, client: client)
+                   Timing.get_elapsed_minutes([@coding], client: client)
         end
       )
     end

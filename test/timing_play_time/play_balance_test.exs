@@ -109,6 +109,58 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert {:ok, balance} = PlayBalance.compute(user)
       assert balance.total == 0.0
     end
+
+    test "fetches every activity's elapsed minutes in a single call to the plural fetcher", %{
+      user: user
+    } do
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -1, :day)
+        })
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Learning",
+          time_source_identifier: "learning-proj-1",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -1, :day)
+        })
+
+      test_pid = self()
+
+      get_elapsed_minutes = fn activities, opts ->
+        send(test_pid, :fetch_called)
+        TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes(activities, opts)
+      end
+
+      assert {:ok, _balance} = PlayBalance.compute(user, [], get_elapsed_minutes)
+
+      assert_received :fetch_called
+      refute_received :fetch_called
+    end
+
+    test "zeroes the timing-derived total (rather than erroring) when the fetcher fails", %{
+      user: user
+    } do
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -1, :day)
+        })
+
+      {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 5.0)
+
+      get_elapsed_minutes = fn _activities, _opts -> {:error, :boom} end
+
+      assert {:ok, balance} = PlayBalance.compute(user, [], get_elapsed_minutes)
+      assert balance.timing_derived_total == 0.0
+      assert balance.total == 5.0
+    end
   end
 
   describe "today_activity_minutes/2" do
@@ -193,17 +245,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert_in_delta today.playtime, today.today_net + today.reserve, 0.001
     end
 
-    test "skips an activity whose get_elapsed_minutes call fails, rather than failing the whole computation",
+    test "zeroes every activity's totals for the computation when the fetcher errors (ADR-0008's shared failure blast radius)",
          %{user: user} do
-      {:ok, _broken} =
-        PersistenceStub.create_activity(user.id, %{
-          name: "Broken",
-          time_source_identifier: "broken-proj",
-          multiplier: 1.0,
-          activated_at: ~U[2026-07-01 00:00:00Z]
-        })
-
-      {:ok, _working} =
+      {:ok, _activity} =
         PersistenceStub.create_activity(user.id, %{
           name: "Coding",
           time_source_identifier: "coding-proj-1",
@@ -211,16 +255,15 @@ defmodule TimingPlayTime.PlayBalanceTest do
           activated_at: ~U[2026-07-01 00:00:00Z]
         })
 
-      now = ~U[2026-07-25 10:00:00Z]
+      {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 10.0)
 
-      get_elapsed_minutes = fn
-        %{time_source_identifier: "broken-proj"}, _opts -> {:error, :boom}
-        activity, opts -> TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes(activity, opts)
-      end
+      now = ~U[2026-07-25 10:00:00Z]
+      get_elapsed_minutes = fn _activities, _opts -> {:error, :boom} end
 
       assert {:ok, today} = PlayBalance.compute_today(user, now, [], get_elapsed_minutes)
 
-      assert_in_delta today.earned_today, 45.0 * (22 / 24), 0.01
+      assert today.earned_today == 0.0
+      assert today.reserve == 10.0
     end
 
     test "allows today_net and playtime to go negative when Playtime Used exceeds what was earned",

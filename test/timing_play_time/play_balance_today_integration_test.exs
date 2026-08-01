@@ -36,9 +36,17 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
 
       entries = [
         # Yesterday (before local start-of-day) — must be excluded.
-        %{"duration" => 9999, "start_date" => "2026-07-25T10:00:00+00:00"},
+        %{
+          "duration" => 9999,
+          "start_date" => "2026-07-25T10:00:00+00:00",
+          "project" => %{"self" => "/projects/coding-proj-1"}
+        },
         # Today, within the window — must be counted.
-        %{"duration" => 3600, "start_date" => "2026-07-26T02:00:00+00:00"}
+        %{
+          "duration" => 3600,
+          "start_date" => "2026-07-26T02:00:00+00:00",
+          "project" => %{"self" => "/projects/coding-proj-1"}
+        }
       ]
 
       MockServer.with_server(
@@ -70,9 +78,17 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
 
       entries = [
         # After local start-of-day but before activation — must be counted.
-        %{"duration" => 9999, "start_date" => "2026-07-25T15:00:00+00:00"},
+        %{
+          "duration" => 9999,
+          "start_date" => "2026-07-25T15:00:00+00:00",
+          "project" => %{"self" => "/projects/coding-proj-1"}
+        },
         # After activation — must be counted.
-        %{"duration" => 1800, "start_date" => "2026-07-26T01:00:00+00:00"}
+        %{
+          "duration" => 1800,
+          "start_date" => "2026-07-26T01:00:00+00:00",
+          "project" => %{"self" => "/projects/coding-proj-1"}
+        }
       ]
 
       MockServer.with_server(
