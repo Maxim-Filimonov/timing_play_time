@@ -10,3 +10,5 @@ This means an Activity activated later than another can retroactively earn Play 
 
 - **Per-Activity client-side filtering after the shared fetch** — fetch the wide range once, then drop entries earlier than each Activity's own cutoff when bucketing by project. Preserves the original precision but was rejected for simplicity; revisit if the retroactive-earning behavior turns out to matter in practice.
 - **Group Activities by activation day and issue one batched call per group** — preserves precision, costs more than 1 call when activation dates differ. Rejected as unnecessary complexity for the common case.
+
+See [ADR-0009](0009-batch-per-entity-adapter-calls-to-avoid-n-plus-1.md) for the general principle this is an instance of: adapter contracts for slow external APIs should be designed batched from the start, not retrofitted after an N+1 call pattern causes real latency problems.

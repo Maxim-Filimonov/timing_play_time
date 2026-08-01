@@ -69,3 +69,7 @@ that possible — write future `ready-for-agent` issues the same way.
 - [ ] Any external-API quirks relevant to the change (rate limits, page
       caps, ID formats, ordering guarantees) are confirmed and stated inline,
       not left implicit.
+- [ ] If the spec involves a new adapter or a new per-entity call to an
+      external system, checked for an N+1 shape (one call per domain entity)
+      before the contract's signature is finalized — see
+      [ADR-0009](../adr/0009-batch-per-entity-adapter-calls-to-avoid-n-plus-1.md).

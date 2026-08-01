@@ -14,4 +14,4 @@ Core domain code (Play Balance computation, CLI/web handlers) depends only on th
 ## Consequences
 
 - Adding a second time source (e.g. a different tracker, or a plain manual-entry source) or a second persistence backend means writing a new adapter against the existing contract, not changing core logic.
-- The plug-in contracts themselves become the thing to get right early — changing a contract's shape later means updating every adapter behind it.
+- The plug-in contracts themselves become the thing to get right early — changing a contract's shape later means updating every adapter behind it. In particular, when a contract fetches data per-entity from a slow external system, design it batched (entity list in, not one entity) from the start — see [ADR-0009](0009-batch-per-entity-adapter-calls-to-avoid-n-plus-1.md).
