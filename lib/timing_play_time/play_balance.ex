@@ -39,8 +39,13 @@ defmodule TimingPlayTime.PlayBalance do
         playtime_used_total: 45.0
       }}
   """
-  def compute(user, time_source_opts \\ []) do
-    with {:ok, timing_derived} <- compute_timing_derived_total(user, time_source_opts),
+  def compute(
+        user,
+        time_source_opts \\ [],
+        get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
+      ) do
+    with {:ok, timing_derived} <-
+           compute_timing_derived_total(user, time_source_opts, get_elapsed_minutes),
          {:ok, manual_sync} <- get_manual_sync_total(user),
          {:ok, playtime_used} <- get_playtime_used_total(user) do
       balance = %{
@@ -182,11 +187,11 @@ defmodule TimingPlayTime.PlayBalance do
 
   # Private functions
 
-  defp compute_timing_derived_total(user, time_source_opts) do
+  defp compute_timing_derived_total(user, time_source_opts, get_elapsed_minutes) do
     with {:ok, activities} <- @persistence.list_activities(user.id) do
       total =
         Enum.reduce(activities, 0.0, fn activity, acc ->
-          case @time_source.get_elapsed_minutes(activity, time_source_opts) do
+          case get_elapsed_minutes.(activity, time_source_opts) do
             {:ok, minutes} ->
               acc + minutes * activity.multiplier
 
