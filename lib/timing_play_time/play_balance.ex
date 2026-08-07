@@ -10,11 +10,16 @@ defmodule TimingPlayTime.PlayBalance do
   - Playtime Used Total: Sum of all logged playtime usage
   """
 
+  alias TimingPlayTime.EntryLedger
   alias TimingPlayTime.LocalDay
   alias TimingPlayTime.PlaytimeUsed
 
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
   @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
+
+  # The Entry Expiry Window (ADR-0010): an exact rolling cutoff, re-evaluated
+  # on every read, not aligned to local calendar days.
+  @expiry_window_days 7
 
   @doc """
   Computes the current Play Balance for a user.
@@ -92,27 +97,41 @@ defmodule TimingPlayTime.PlayBalance do
   end
 
   @doc """
-  Computes the dashboard's "Playtime" figure: Today's PT (today's
-  Timing-earned Play Minutes, minus today's Playtime Used — resets every
-  local calendar day, no exceptions) plus Reserve (Play Minutes earned but
-  not yet spent from days *before* today, plus the Pushscroll Balance).
+  Computes the dashboard's "Playtime" figure: Today's PT (today's earned
+  Play Minutes, net of the Entry Consumption Ledger's draw-down — resets
+  every local calendar day, no exceptions) plus Reserve (User Displayed
+  Total's prior-days portion, plus the Pushscroll Balance).
 
-  Pushscroll Balance has no day boundary of its own — it's a net balance
-  synced from an external app (rises when the User exercises, falls when
-  they spend it on Pushscroll-tracked apps) — so it's folded into Reserve
-  rather than Today's PT, alongside the rest of the carried-over history.
+  `today_net` and `reserve` are ledger-based (ADR-0010), not simple
+  subtraction: every Playtime Used record is replayed, oldest first,
+  against individual Timing entries — each usage consumes its own local
+  day's entries first, then older entries (oldest `start_date` first) as
+  overflow. Because consumption is tracked per-entry, an entry aging out of
+  the Entry Expiry Window (more than 7 days since its own `start_date`)
+  takes any already-recorded spend against it with it — unlike a raw
+  running "used" total, this can never re-count as debt against a User once
+  the entries it drew from are gone (see ADR-0010's rejected "simple
+  aggregate" alternative).
 
-  `reserve` is derived as (cumulative Timing-Derived Earned Total minus
-  today's earned) minus prior-days' Playtime Used, plus Pushscroll Balance —
-  a pure decomposition, so `playtime` always equals what `compute/2` would
-  return as `:total` for the same activity, just split into a today part and
-  a carried-over part.
+  `today_net` is always >= 0 (today's entries fully fund a spend before
+  overflowing elsewhere, so there's nothing left on them to go negative).
+  `reserve` absorbs every overflow instead — including "spend that exceeded
+  every entry earned so far, at the moment it was logged" (the ledger's
+  `:deficit`) — which is the only way Reserve goes negative other than a
+  negative Pushscroll Balance; it never goes negative purely from expiry,
+  since expiry only ever removes minutes already known to be unspent.
+  `playtime` (`today_net + reserve`) is unaffected by exactly how the
+  overflow is attributed between the two — it's a pure decomposition of the
+  same total either way.
 
-  Unlike `compute/2`, `earned_today`/`today_net` reset to just today's
-  activity every local calendar day; `reserve` is where the rest of the
-  history (and the synced Pushscroll Balance) lives instead of
-  disappearing. Every field can go negative (no clamping) — a User can log
-  more Playtime Used than they've earned, either today or historically.
+  Pushscroll Balance has no day boundary or per-entry ledger of its own —
+  it's a net balance synced from an external app — so it's folded into
+  Reserve rather than Today's PT, alongside the rest of the carried-over
+  history.
+
+  `earned_today` and `used_today` are the raw (non-ledger) day totals shown
+  alongside `today_net`, for display — how much was earned/spent today,
+  independent of what a spend was actually matched against.
 
   ## Examples
 
@@ -123,30 +142,40 @@ defmodule TimingPlayTime.PlayBalance do
         pushscroll_balance: 15.0,
         today_net: 17.5,
         reserve: 42.0,
-        playtime: 59.5
+        playtime: 59.5,
+        receipts: [%{usage_id: "...", breakdown: %{"activity-id" => 10.0}}]
       }}
   """
   def compute_today(
         user,
         now \\ DateTime.utc_now(),
         time_source_opts \\ [],
-        get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
+        list_entries \\ &@time_source.list_entries/2
       ) do
     today_from = LocalDay.start_of_today(user.timezone, now)
+    window_start = DateTime.add(now, -@expiry_window_days, :day)
 
     with {:ok, activities} <- @persistence.list_activities(user.id),
          {:ok, pushscroll_balance} <- get_manual_sync_total(user),
-         {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now),
-         {:ok, used_before_today} <-
-           PlaytimeUsed.total_used_before_today(user.id, user.timezone, now) do
-      opts = [to: now, today_from: today_from] ++ time_source_opts
-      totals = fetch_totals(activities, opts, get_elapsed_minutes)
+         {:ok, usages} <- PlaytimeUsed.list_all(user.id),
+         {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now) do
+      opts = [to: now] ++ time_source_opts
+      raw_entries = fetch_entries(activities, opts, list_entries)
+      ledger_entries = build_ledger_entries(activities, raw_entries)
 
-      earned_today = sum_totals(activities, totals, :today)
-      earned_cumulative = sum_totals(activities, totals, :cumulative)
+      earned_today =
+        sum_ledger_entries(ledger_entries, &(DateTime.compare(&1.start_date, today_from) != :lt))
 
-      today_net = earned_today - used_today
-      reserve = earned_cumulative - earned_today - used_before_today + pushscroll_balance
+      %{entries: replayed, receipts: receipts, deficit: deficit} =
+        EntryLedger.replay(ledger_entries, usages, user.timezone)
+
+      in_window = Enum.filter(replayed, &(DateTime.compare(&1.start_date, window_start) != :lt))
+
+      {today_entries, reserve_entries} =
+        Enum.split_with(in_window, &(DateTime.compare(&1.start_date, today_from) != :lt))
+
+      today_net = sum_remaining(today_entries)
+      reserve = sum_remaining(reserve_entries) + pushscroll_balance - deficit
 
       {:ok,
        %{
@@ -155,7 +184,8 @@ defmodule TimingPlayTime.PlayBalance do
          pushscroll_balance: pushscroll_balance,
          today_net: today_net,
          reserve: reserve,
-         playtime: today_net + reserve
+         playtime: today_net + reserve,
+         receipts: receipts
        }}
     end
   end
@@ -196,5 +226,39 @@ defmodule TimingPlayTime.PlayBalance do
 
   defp get_playtime_used_total(user) do
     @persistence.total_playtime_used(user.id)
+  end
+
+  # A fetch failure zeroes every Activity's entries for this computation
+  # (mirrors fetch_totals/3's ADR-0008 shared failure blast radius).
+  defp fetch_entries(activities, opts, list_entries) do
+    case list_entries.(activities, opts) do
+      {:ok, entries} -> entries
+      {:error, _reason} -> %{}
+    end
+  end
+
+  # Applies each Activity's Multiplier to its raw Timing entries, tagging
+  # each with the Activity it belongs to for the Entry Consumption Ledger
+  # and Spend Receipt.
+  defp build_ledger_entries(activities, raw_entries_by_identifier) do
+    Enum.flat_map(activities, fn activity ->
+      raw_entries_by_identifier
+      |> Map.get(activity.time_source_identifier, [])
+      |> Enum.map(fn %{start_date: start_date, minutes: minutes} ->
+        %{
+          activity_id: activity.id,
+          start_date: start_date,
+          play_minutes: minutes * activity.multiplier
+        }
+      end)
+    end)
+  end
+
+  defp sum_ledger_entries(entries, filter) do
+    entries |> Enum.filter(filter) |> Enum.reduce(0.0, &(&2 + &1.play_minutes))
+  end
+
+  defp sum_remaining(entries) do
+    Enum.reduce(entries, 0.0, &(&2 + &1.remaining))
   end
 end

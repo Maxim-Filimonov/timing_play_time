@@ -42,13 +42,51 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
   # projects.
   defp simulate_minutes(activity, from, to) do
     days_active = DateTime.diff(to, from, :second) / 86_400
+    daily_rate(activity) * days_active
+  end
 
+  @impl true
+  def list_entries(activities, opts \\ [])
+
+  def list_entries(activities, opts) do
+    to = Keyword.get(opts, :to, DateTime.utc_now())
+
+    entries =
+      Map.new(activities, fn activity ->
+        {activity.time_source_identifier, simulate_entries(activity, to)}
+      end)
+
+    {:ok, entries}
+  rescue
+    error ->
+      {:error, {:stub_error, error}}
+  end
+
+  # One synthetic entry per elapsed calendar day since `activated_at` (or a
+  # single same-day entry when unset), each worth a full day's rate at that
+  # day's UTC midnight — real dated entries, unlike get_elapsed_minutes/2's
+  # continuous day-fraction simulation, so the Entry Consumption Ledger has
+  # something to expire and draw down.
+  defp simulate_entries(activity, to) do
+    from = activity.activated_at || to
+    rate = daily_rate(activity)
+    from_date = DateTime.to_date(from)
+    to_date = DateTime.to_date(to)
+    days = max(Date.diff(to_date, from_date), 0)
+
+    for offset <- 0..days do
+      start_date = from_date |> Date.add(offset) |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+      %{start_date: start_date, minutes: rate}
+    end
+  end
+
+  defp daily_rate(activity) do
     case activity.time_source_identifier do
-      "coding-" <> _ -> 45.0 * days_active
-      "learning-" <> _ -> 42.0 * days_active
-      "exercise-" <> _ -> 36.0 * days_active
-      "writing-" <> _ -> 30.0 * days_active
-      _ -> 20.0 * days_active
+      "coding-" <> _ -> 45.0
+      "learning-" <> _ -> 42.0
+      "exercise-" <> _ -> 36.0
+      "writing-" <> _ -> 30.0
+      _ -> 20.0
     end
   end
 end

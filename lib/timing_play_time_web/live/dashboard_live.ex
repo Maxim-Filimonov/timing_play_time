@@ -75,16 +75,21 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   def handle_event("log_playtime", %{"minutes" => minutes_str}, socket) do
     case Float.parse(minutes_str) do
       {minutes, _} when minutes > 0 ->
-        {:ok, _usage} = PlaytimeUsed.log_usage(socket.assigns.current_user.id, minutes)
+        {:ok, usage} = PlaytimeUsed.log_usage(socket.assigns.current_user.id, minutes)
 
         broadcast_balance_updated(socket.assigns.current_user)
 
-        {_activities, get_elapsed_minutes} = fetch_activities_and_fetcher(socket)
+        {_activities, get_elapsed_minutes, list_entries} =
+          fetch_activities_and_balance_fetchers(socket)
+
+        socket = load_balance(socket, get_elapsed_minutes, list_entries)
 
         socket =
-          socket
-          |> load_balance(get_elapsed_minutes)
-          |> put_flash(:info, "Logged #{minutes} play minutes!")
+          put_flash(
+            socket,
+            :info,
+            "Logged #{minutes} play minutes!" <> receipt_message(socket, usage.id)
+          )
 
         {:noreply, socket}
 
@@ -101,11 +106,12 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
         broadcast_balance_updated(socket.assigns.current_user)
 
-        {_activities, get_elapsed_minutes} = fetch_activities_and_fetcher(socket)
+        {_activities, get_elapsed_minutes, list_entries} =
+          fetch_activities_and_balance_fetchers(socket)
 
         socket =
           socket
-          |> load_balance(get_elapsed_minutes)
+          |> load_balance(get_elapsed_minutes, list_entries)
           |> put_flash(:info, "Pushscroll Balance set to #{minutes} minutes!")
 
         {:noreply, socket}
@@ -224,8 +230,10 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
   @impl true
   def handle_info({:balance_updated, _payload}, socket) do
-    {_activities, get_elapsed_minutes} = fetch_activities_and_fetcher(socket)
-    {:noreply, load_balance(socket, get_elapsed_minutes)}
+    {_activities, get_elapsed_minutes, list_entries} =
+      fetch_activities_and_balance_fetchers(socket)
+
+    {:noreply, load_balance(socket, get_elapsed_minutes, list_entries)}
   end
 
   @impl true
@@ -270,21 +278,25 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   end
 
   # `load_balance`, `load_today` (via `PlayBalance.compute_today`), and
-  # `load_activities` each want elapsed-minutes data for every Activity —
-  # without sharing a fetcher, that's a separate call per caller. The
-  # `TimeSource` contract fetches every given Activity's cumulative and
-  # today-scoped totals in one shot (ADR-0008), so
-  # `fetch_activities_and_fetcher/1` makes that one real call up front and
-  # hands every caller in this pipeline a memoized lookup instead.
+  # `load_activities` each want Timing data for every Activity — without
+  # sharing a fetcher, that's a separate call per caller. `get_elapsed_minutes`
+  # fetches every given Activity's cumulative and today-scoped totals in one
+  # shot (ADR-0008); `list_entries` is a second, separate call fetching
+  # individual dated entries for the Entry Consumption Ledger (ADR-0010) —
+  # kept apart from `get_elapsed_minutes` so the debug-only Play Balance
+  # reveal keeps fetching exactly as before. `fetch_activities_and_*` make
+  # each real call once up front and hand every caller in this pipeline a
+  # memoized lookup instead.
   defp refresh_timing_data(socket) do
-    {activities, get_elapsed_minutes} = fetch_activities_and_fetcher(socket)
+    {activities, get_elapsed_minutes, list_entries} =
+      fetch_activities_and_balance_fetchers(socket)
 
     socket
-    |> load_balance(get_elapsed_minutes)
+    |> load_balance(get_elapsed_minutes, list_entries)
     |> load_activities(activities, get_elapsed_minutes)
   end
 
-  defp load_balance(socket, get_elapsed_minutes) do
+  defp load_balance(socket, get_elapsed_minutes, list_entries) do
     user = socket.assigns.current_user
 
     socket =
@@ -301,7 +313,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
           })
       end
 
-    load_today(socket, user, get_elapsed_minutes)
+    load_today(socket, user, list_entries)
   end
 
   @empty_today %{
@@ -310,22 +322,53 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     pushscroll_balance: 0.0,
     today_net: 0.0,
     reserve: 0.0,
-    playtime: 0.0
+    playtime: 0.0,
+    receipts: []
   }
 
   # Briefly nil on a brand-new anonymous user, until the `.TimezoneDetector`
   # hook's first pushEvent lands (ADR-0006) — LocalDay needs a real IANA
   # zone name, so this shows zero rather than crashing (mirrors
   # `with_today_minutes/2`'s same guard for the per-Activity figures).
-  defp load_today(socket, %{timezone: nil}, _get_elapsed_minutes) do
+  defp load_today(socket, %{timezone: nil}, _list_entries) do
     assign(socket, :today, @empty_today)
   end
 
-  defp load_today(socket, user, get_elapsed_minutes) do
-    case PlayBalance.compute_today(user, DateTime.utc_now(), [], get_elapsed_minutes) do
+  defp load_today(socket, user, list_entries) do
+    case PlayBalance.compute_today(user, DateTime.utc_now(), [], list_entries) do
       {:ok, today} -> assign(socket, :today, today)
       {:error, _reason} -> assign(socket, :today, @empty_today)
     end
+  end
+
+  # The Spend Receipt for a just-logged usage, formatted as a flash-message
+  # suffix — always appended (ADR-0010: "always shown, even for
+  # single-Activity spends", so the UI element is predictable rather than
+  # intermittent). Empty when nothing was matched (a fully unmatched spend,
+  # the ledger's `:deficit`) or `:today` couldn't be loaded (no timezone yet).
+  defp receipt_message(socket, usage_id) do
+    with %{receipts: receipts} <- socket.assigns.today,
+         %{breakdown: breakdown} when map_size(breakdown) > 0 <-
+           Enum.find(receipts, &(&1.usage_id == usage_id)) do
+      " Funded by " <> format_breakdown(breakdown, socket.assigns.activities) <> "."
+    else
+      _ -> ""
+    end
+  end
+
+  defp format_breakdown(breakdown, activities) do
+    activity_name = fn activity_id ->
+      case Enum.find(activities || [], &(&1.id == activity_id)) do
+        nil -> "an activity"
+        activity -> activity.name
+      end
+    end
+
+    breakdown
+    |> Enum.map(fn {activity_id, minutes} ->
+      "#{activity_name.(activity_id)}: #{Float.round(minutes, 1)}"
+    end)
+    |> Enum.join(", ")
   end
 
   defp load_activities(socket, activities, get_elapsed_minutes) do
@@ -382,17 +425,44 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     {activities, prefetched_get_elapsed_minutes(activities, user, now, time_source_opts)}
   end
 
+  # Like `fetch_activities_and_fetcher/1`, but also prefetches `list_entries`
+  # (ADR-0010) — for callers that need `load_balance/3`, which computes both
+  # the debug Play Balance (`get_elapsed_minutes`) and the user-facing
+  # Playtime/Reserve figures (`list_entries`).
+  defp fetch_activities_and_balance_fetchers(socket) do
+    user = socket.assigns.current_user
+    time_source_opts = client_opts(socket)
+    now = DateTime.utc_now()
+
+    activities =
+      case ActivityManager.list_activities(user.id) do
+        {:ok, activities} -> activities
+        {:error, _reason} -> []
+      end
+
+    {activities, prefetched_get_elapsed_minutes(activities, user, now, time_source_opts),
+     prefetched_list_entries(activities, now, time_source_opts)}
+  end
+
   # Fetches every given Activity's cumulative and today-scoped elapsed
   # minutes in the one real call the `TimeSource` contract makes for a whole
   # Activity list (ADR-0008), then hands back a lookup function that ignores
   # whatever it's called with and just returns that cached result — so
-  # downstream callers (PlayBalance.compute/3, PlayBalance.compute_today/4,
-  # with_today_minutes/3) share the single fetch instead of each triggering
-  # their own.
+  # downstream callers (PlayBalance.compute/3, with_today_minutes/3) share
+  # the single fetch instead of each triggering their own.
   defp prefetched_get_elapsed_minutes(activities, user, now, time_source_opts) do
     today_from = today_from(user, now)
     opts = [to: now, today_from: today_from] ++ time_source_opts
     result = @time_source.get_elapsed_minutes(activities, opts)
+
+    fn _activities, _opts -> result end
+  end
+
+  # Same memoization as prefetched_get_elapsed_minutes/4, for the separate
+  # `list_entries` call PlayBalance.compute_today/4 needs (ADR-0010).
+  defp prefetched_list_entries(activities, now, time_source_opts) do
+    opts = [to: now] ++ time_source_opts
+    result = @time_source.list_entries(activities, opts)
 
     fn _activities, _opts -> result end
   end

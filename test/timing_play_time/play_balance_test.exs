@@ -213,7 +213,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
     end
   end
 
-  describe "compute_today/3" do
+  describe "compute_today/4" do
     test "sums today's earned Play Minutes and today's used minutes; folds Pushscroll Balance into Reserve",
          %{user: user} do
       {:ok, _activity} =
@@ -227,22 +227,37 @@ defmodule TimingPlayTime.PlayBalanceTest do
       {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 10.0)
 
       # Local start of today is 2026-07-24T12:00:00Z.
-      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 999.0, ~U[2026-07-24 11:00:00Z])
-      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 30.0, ~U[2026-07-25 09:00:00Z])
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 30.0, ~U[2026-07-23 09:00:00Z])
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 15.0, ~U[2026-07-25 05:00:00Z])
 
       now = ~U[2026-07-25 10:00:00Z]
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now)
+      # Raw (pre-multiplier) Timing minutes: a reserve entry (5 days back,
+      # within the 7-day Entry Expiry Window) and a today entry.
+      list_entries = fn _activities, _opts ->
+        {:ok,
+         %{
+           "coding-proj-1" => [
+             %{start_date: ~U[2026-07-20 09:00:00Z], minutes: 50.0},
+             %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0}
+           ]
+         }}
+      end
 
-      assert_in_delta today.earned_today, 45.0 * (22 / 24) * 2.0, 0.01
-      assert today.used_today == 30.0
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      # Today's entry: 10.0 * 2.0 multiplier = 20.0, unaffected by consumption.
+      assert today.earned_today == 20.0
+      assert today.used_today == 15.0
       assert today.pushscroll_balance == 10.0
-      assert_in_delta today.today_net, today.earned_today - 30.0, 0.001
-      # Prior-days earned (from Activated At to local start-of-today) minus
-      # prior-days used (999.0, logged before local start-of-today), plus
-      # Pushscroll Balance (10.0).
-      assert_in_delta today.reserve, 1126.0, 0.01
-      assert_in_delta today.playtime, today.today_net + today.reserve, 0.001
+      # Today's own entry (20.0) minus today's own spend (15.0) — the
+      # earlier (07-23) spend can't touch it (didn't exist yet then).
+      assert today.today_net == 5.0
+      # Reserve entry (100.0) minus the 07-23 spend (30.0, drawn from it as
+      # overflow, since no entries existed on 07-23 itself) plus Pushscroll
+      # Balance (10.0).
+      assert today.reserve == 80.0
+      assert today.playtime == 85.0
     end
 
     test "zeroes every activity's totals for the computation when the fetcher errors (ADR-0008's shared failure blast radius)",
@@ -258,15 +273,15 @@ defmodule TimingPlayTime.PlayBalanceTest do
       {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 10.0)
 
       now = ~U[2026-07-25 10:00:00Z]
-      get_elapsed_minutes = fn _activities, _opts -> {:error, :boom} end
+      list_entries = fn _activities, _opts -> {:error, :boom} end
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], get_elapsed_minutes)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
 
       assert today.earned_today == 0.0
       assert today.reserve == 10.0
     end
 
-    test "allows today_net and playtime to go negative when Playtime Used exceeds what was earned",
+    test "floors today_net at zero and spills the deficit into reserve when Playtime Used exceeds everything earned so far",
          %{user: user} do
       {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 5.0)
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 100.0, ~U[2026-07-25 09:00:00Z])
@@ -277,8 +292,8 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert today.earned_today == 0.0
       assert today.used_today == 100.0
-      assert today.today_net == -100.0
-      assert today.reserve == 5.0
+      assert today.today_net == 0.0
+      assert today.reserve == -95.0
       assert today.playtime == -95.0
     end
 
@@ -295,6 +310,61 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.today_net == 0.0
       assert today.reserve == -50.0
       assert today.playtime == -50.0
+    end
+
+    test "excludes an entry more than 7 days old from Reserve (Entry Expiry Window)", %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      # Exactly on the boundary: 7 days and 1 minute before `now`, so just
+      # outside the window (an exact rolling cutoff, not calendar-aligned).
+      list_entries = fn _activities, _opts ->
+        {:ok,
+         %{
+           "coding-proj-1" => [
+             %{start_date: DateTime.add(now, -7 * 24 * 60 - 1, :minute), minutes: 100.0}
+           ]
+         }}
+      end
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      assert today.reserve == 0.0
+      assert today.playtime == 0.0
+    end
+
+    test "an entry's already-spent minutes are never double-counted against a User once it expires",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      # Fully spent (100 earned, 100 used) 8 days ago — outside the window,
+      # but its consumption shouldn't leave any residual debt behind either.
+      list_entries = fn _activities, _opts ->
+        {:ok,
+         %{"coding-proj-1" => [%{start_date: DateTime.add(now, -8, :day), minutes: 100.0}]}}
+      end
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 100.0, DateTime.add(now, -8, :day))
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      assert today.reserve == 0.0
+      assert today.playtime == 0.0
     end
   end
 end
