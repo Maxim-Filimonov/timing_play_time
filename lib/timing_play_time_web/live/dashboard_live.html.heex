@@ -45,7 +45,7 @@
           <p class="text-purple-200 mb-6">Time you've earned to spend on fun today!</p>
 
           <%= if @today do %>
-            <div class="flex items-baseline gap-3 mb-6">
+            <div class="flex items-baseline gap-3 mb-2">
               <.time_display
                 minutes={@today.playtime}
                 value_class={"text-7xl font-black #{if @today.playtime < 0, do: "text-red-300"}"}
@@ -53,7 +53,27 @@
               />
             </div>
 
-            <div class="grid md:grid-cols-3 gap-4 text-sm">
+            <%!-- Playtime == week_earned - week_used + pushscroll_balance, exactly,
+            always (see PlayBalance.compute_today/4's moduledoc) — shown so the
+            hero number is checkable at a glance, rather than requiring an
+            explanation of how Today's PT/Reserve are split. --%>
+            <p class="text-purple-200 text-sm mb-6">
+              = <.time_display
+                minutes={@today.week_earned}
+                format={:short}
+                value_class="font-semibold text-white"
+              /> earned this week − <.time_display
+                minutes={@today.week_used}
+                format={:short}
+                value_class="font-semibold text-white"
+              /> used this week + <.time_display
+                minutes={@today.pushscroll_balance}
+                format={:short}
+                value_class="font-semibold text-white"
+              /> Pushscroll Balance
+            </p>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
                 <div class="text-purple-200 mb-2 font-semibold">Today's</div>
                 <div class="flex justify-between">
@@ -63,6 +83,17 @@
                 <div class="flex justify-between">
                   <span>Used Today</span>
                   <span class="font-bold text-red-300">{Float.round(@today.used_today, 1)}</span>
+                </div>
+              </div>
+              <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
+                <div class="text-purple-200 mb-2 font-semibold">This Week</div>
+                <div class="flex justify-between">
+                  <span>Earned</span>
+                  <span class="font-bold">{Float.round(@today.week_earned, 1)}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>Used</span>
+                  <span class="font-bold text-red-300">{Float.round(@today.week_used, 1)}</span>
                 </div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
@@ -83,7 +114,8 @@
                 <span class="text-3xl font-semibold text-purple-200">minutes</span>
               </div>
 
-              <div class="grid md:grid-cols-3 gap-4 text-sm">
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
                 <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
                 <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
                 <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm h-[68px]"></div>
@@ -388,6 +420,18 @@
                       />
                       · play <.time_display
                         minutes={activity.play_minutes}
+                        format={:short}
+                        value_class="font-semibold text-purple-600"
+                      />
+                    </div>
+                    <div class="text-sm text-gray-600 mt-1">
+                      This week: <.time_display
+                        minutes={activity.week_minutes}
+                        format={:short}
+                        value_class="font-semibold text-gray-900"
+                      />
+                      · play <.time_display
+                        minutes={activity.week_play_minutes}
                         format={:short}
                         value_class="font-semibold text-purple-600"
                       />

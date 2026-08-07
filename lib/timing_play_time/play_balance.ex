@@ -22,6 +22,24 @@ defmodule TimingPlayTime.PlayBalance do
   @expiry_window_days 7
 
   @doc """
+  The Entry Expiry Window's start (ADR-0010): an exact rolling cutoff
+  `now - 7 days`, not aligned to local calendar days. Exposed so callers
+  fetching `list_entries/2` results themselves (e.g. the dashboard,
+  prefetching once for both `compute_today/4` and a per-Activity "This
+  Week" figure) can bound that fetch to the same window `compute_today/4`
+  uses internally, rather than fetching unbounded history and relying on
+  this module to filter it back down to size.
+
+  ## Examples
+
+      iex> PlayBalance.expiry_window_start(~U[2026-07-25 10:00:00Z])
+      ~U[2026-07-18 10:00:00Z]
+  """
+  def expiry_window_start(now \\ DateTime.utc_now()) do
+    DateTime.add(now, -@expiry_window_days, :day)
+  end
+
+  @doc """
   Computes the current Play Balance for a user.
 
   `time_source_opts` is merged into every `get_elapsed_minutes/2` call — used
@@ -97,6 +115,45 @@ defmodule TimingPlayTime.PlayBalance do
   end
 
   @doc """
+  Computes an Activity's raw Timing minutes and Play Minutes for the last 7
+  days (the Entry Expiry Window's exact rolling cutoff, `now - 7 days` —
+  ADR-0010, not aligned to local calendar days like `today_activity_minutes/4`
+  is), for the dashboard's per-Activity "This Week" figure.
+
+  Unlike `today_activity_minutes/4` (which uses `get_elapsed_minutes/2`'s
+  pre-aggregated cumulative/today totals), this uses `list_entries/2`'s
+  individual dated entries, since an arbitrary 7-day window needs entry
+  dates to filter by, not a pre-aggregated sum. This is the raw earned
+  total, not net of any spending — Playtime Used draws from a single global
+  pool, not a per-Activity one (see CONTEXT.md's Playtime Used entry), so
+  there's no meaningful way to net a spend against one Activity's figure
+  alone the way `PlayBalance.compute_today/4`'s ledger nets the User's
+  total.
+
+  ## Examples
+
+      iex> PlayBalance.week_activity_minutes(activity)
+      {:ok, %{minutes: 120.0, play_minutes: 180.0}}
+  """
+  def week_activity_minutes(
+        activity,
+        now \\ DateTime.utc_now(),
+        list_entries \\ &@time_source.list_entries/2
+      ) do
+    window_start = expiry_window_start(now)
+
+    with {:ok, entries_by_identifier} <- list_entries.([activity], from: window_start, to: now) do
+      minutes =
+        entries_by_identifier
+        |> Map.get(activity.time_source_identifier, [])
+        |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
+        |> Enum.reduce(0.0, &(&2 + &1.minutes))
+
+      {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
+    end
+  end
+
+  @doc """
   Computes the dashboard's "Playtime" figure: Today's PT (today's earned
   Play Minutes, net of the Entry Consumption Ledger's draw-down — resets
   every local calendar day, no exceptions) plus Reserve (User Displayed
@@ -139,7 +196,21 @@ defmodule TimingPlayTime.PlayBalance do
 
   `earned_today` and `used_today` are the raw (non-ledger) day totals shown
   alongside `today_net`, for display — how much was earned/spent today,
-  independent of what a spend was actually matched against.
+  independent of what a spend was actually matched against. `week_earned`
+  and `week_used` are the same idea over the full window: every in-window
+  entry's original (pre-consumption) `play_minutes`, and every recent
+  usage's `minutes`, both summed with no ledger involved.
+
+  **`playtime == week_earned - week_used + pushscroll_balance`, exactly,
+  always** — the ledger's `:deficit` is *by construction* the part of
+  `week_used` that didn't come out of any entry's `remaining`
+  (`consumed_from_entries + deficit == week_used`), so it cancels out of
+  this identity algebraically even though it's very much present inside
+  `today_net`/`reserve`'s own math. This is what makes `week_earned`/
+  `week_used` worth showing on their own next to `playtime` — unlike
+  `today_net + reserve`, this decomposition needs no explanation of
+  flooring, causality, or where deficit went to visibly check the
+  arithmetic.
 
   ## Examples
 
@@ -147,6 +218,8 @@ defmodule TimingPlayTime.PlayBalance do
       {:ok, %{
         earned_today: 27.5,
         used_today: 10.0,
+        week_earned: 120.0,
+        week_used: 90.0,
         pushscroll_balance: 15.0,
         today_net: 17.5,
         reserve: 42.0,
@@ -161,7 +234,7 @@ defmodule TimingPlayTime.PlayBalance do
         list_entries \\ &@time_source.list_entries/2
       ) do
     today_from = LocalDay.start_of_today(user.timezone, now)
-    window_start = DateTime.add(now, -@expiry_window_days, :day)
+    window_start = expiry_window_start(now)
 
     with {:ok, activities} <- @persistence.list_activities(user.id),
          {:ok, pushscroll_balance} <- get_manual_sync_total(user),
@@ -204,10 +277,15 @@ defmodule TimingPlayTime.PlayBalance do
       today_net = sum_remaining(today_entries)
       reserve = sum_remaining(reserve_entries) + pushscroll_balance - deficit
 
+      week_earned = Enum.reduce(ledger_entries, 0.0, &(&2 + &1.play_minutes))
+      week_used = Enum.reduce(recent_usages, 0.0, &(&2 + &1.minutes))
+
       {:ok,
        %{
          earned_today: earned_today,
          used_today: used_today,
+         week_earned: week_earned,
+         week_used: week_used,
          pushscroll_balance: pushscroll_balance,
          today_net: today_net,
          reserve: reserve,

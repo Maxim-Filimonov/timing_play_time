@@ -65,6 +65,21 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     refute html =~ "Manual Sync"
   end
 
+  test "shows a This Week figure per Activity, alongside Today (ADR-0010's Entry Expiry Window)",
+       %{conn: conn, user: user} do
+    {:ok, _activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 2.0,
+        activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    assert html =~ "This week:"
+  end
+
   test "does not show another user's Activities", %{conn: conn, user: user} do
     {:ok, other_user} = Accounts.create_user()
 
@@ -161,6 +176,25 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ "Pushscroll Balance"
     assert html =~ "Reserve"
     refute html =~ "Your Play Balance"
+  end
+
+  test "shows the week_earned/week_used reconciliation under the Playtime hero (ADR-0010)", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, _activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.0,
+        activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    assert html =~ "earned this week"
+    assert html =~ "used this week"
+    assert html =~ "This Week"
   end
 
   test "clicking Edit on an Activity shows an inline form pre-filled with its current values", %{
