@@ -233,7 +233,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
       assert {:error, :not_connected} = Timing.list_entries([@coding], [])
     end
 
-    test "fetches without an Activated-At floor, unlike get_elapsed_minutes/2 (ADR-0010)" do
+    test "defaults start_date_min to the beginning of time (no Activated-At floor) when :from is omitted" do
       MockServer.with_server(
         [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
         fn client ->
@@ -241,6 +241,20 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
 
           assert_receive {:call_tool, "list_time_entries", arguments}
           assert arguments["start_date_min"] == "1970-01-01T00:00:00Z"
+        end
+      )
+    end
+
+    test "sends the given :from (without microseconds) as start_date_min, unlike get_elapsed_minutes/2's Activated-At floor (ADR-0010)" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
+        fn client ->
+          from = ~U[2026-07-18 10:00:00.123456Z]
+
+          assert {:ok, _entries} = Timing.list_entries([@coding], client: client, from: from)
+
+          assert_receive {:call_tool, "list_time_entries", arguments}
+          assert arguments["start_date_min"] == "2026-07-18T10:00:00Z"
         end
       )
     end

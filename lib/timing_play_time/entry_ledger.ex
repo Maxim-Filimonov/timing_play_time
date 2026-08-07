@@ -16,8 +16,21 @@ defmodule TimingPlayTime.EntryLedger do
   that already existed by the time it was logged (`start_date <=
   logged_at`) — consumption never reaches into entries not yet earned.
 
-  Computed live on every read, walking full history — no persisted ledger
-  state, consistent with this app's "recomputed fresh" pattern.
+  Computed live on every read — no persisted ledger state, consistent with
+  this app's "recomputed fresh" pattern.
+
+  **The caller is responsible for windowing `entries` and `usages` to the
+  Entry Expiry Window before calling `replay/3`** (`PlayBalance.compute_today/4`
+  does this). Reserve-overflow consumption is oldest-`start_date`-first
+  with no bound of its own — handed unbounded, all-time history, it drains
+  ancient, already-expired-and-invisible entries before ever touching
+  anything a User can see, so new spending would appear to do nothing
+  until that backlog exhausts. Entries and usages both aging out of the
+  window in lockstep (rather than entries alone) is what makes "spend now"
+  visibly reduce Reserve immediately, and is also what keeps Reserve from
+  drifting ever more negative over time (ADR-0010's rejected "simple
+  aggregate" alternative had this failure precisely because *only* earned
+  was windowed while *used* stayed all-time).
   """
 
   alias TimingPlayTime.LocalDay

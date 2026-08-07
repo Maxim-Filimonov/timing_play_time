@@ -49,11 +49,12 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
   def list_entries(activities, opts \\ [])
 
   def list_entries(activities, opts) do
+    from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to, DateTime.utc_now())
 
     entries =
       Map.new(activities, fn activity ->
-        {activity.time_source_identifier, simulate_entries(activity, to)}
+        {activity.time_source_identifier, simulate_entries(activity, from, to)}
       end)
 
     {:ok, entries}
@@ -62,17 +63,25 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
       {:error, {:stub_error, error}}
   end
 
-  # One synthetic entry per elapsed calendar day since `activated_at` (or a
-  # single same-day entry when unset), each worth a full day's rate at that
-  # day's UTC midnight — real dated entries, unlike get_elapsed_minutes/2's
-  # continuous day-fraction simulation, so the Entry Consumption Ledger has
-  # something to expire and draw down.
-  defp simulate_entries(activity, to) do
-    from = activity.activated_at || to
-    rate = daily_rate(activity)
-    from_date = DateTime.to_date(from)
+  # One synthetic entry per elapsed calendar day since `max(activated_at,
+  # from)` (or a single same-day entry when both are unset), each worth a
+  # full day's rate at that day's UTC midnight — real dated entries, unlike
+  # get_elapsed_minutes/2's continuous day-fraction simulation, so the Entry
+  # Consumption Ledger has something to expire and draw down. Respects an
+  # explicit `:from` the same way the real Timing adapter does, so a
+  # windowed fetch (ADR-0010) doesn't simulate entries the caller didn't ask
+  # for.
+  defp simulate_entries(activity, from, to) do
+    lower_bound =
+      case Enum.reject([activity.activated_at, from], &is_nil/1) do
+        [] -> to
+        candidates -> Enum.max(candidates, DateTime)
+      end
+
+    from_date = DateTime.to_date(lower_bound)
     to_date = DateTime.to_date(to)
     days = max(Date.diff(to_date, from_date), 0)
+    rate = daily_rate(activity)
 
     for offset <- 0..days do
       start_date = from_date |> Date.add(offset) |> DateTime.new!(~T[00:00:00], "Etc/UTC")

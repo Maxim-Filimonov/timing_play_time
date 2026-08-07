@@ -366,5 +366,66 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.reserve == 0.0
       assert today.playtime == 0.0
     end
+
+    test "a recent spend visibly draws down Reserve, rather than being silently absorbed by an ancient already-expired backlog",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      # A large, long-unspent backlog from months ago (outside the window,
+      # already invisible) plus one small recent (in-window) reserve entry.
+      # Oldest-first FIFO must not let a spend hide inside the invisible
+      # backlog forever — the caller is responsible for not handing the
+      # ledger that backlog at all (EntryLedger's moduledoc).
+      list_entries = fn _activities, _opts ->
+        {:ok,
+         %{
+           "coding-proj-1" => [
+             %{start_date: DateTime.add(now, -90, :day), minutes: 10_000.0},
+             %{start_date: DateTime.add(now, -3, :day), minutes: 50.0}
+           ]
+         }}
+      end
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 30.0, now)
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      # The 3-day-old reserve entry (50.0) must absorb the spend — the
+      # 90-day-old entry is outside the window and unreachable.
+      assert today.reserve == 20.0
+      assert today.playtime == 20.0
+    end
+
+    test "bounds the entries fetch to the Entry Expiry Window's start, not unbounded all-time",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+      test_pid = self()
+
+      list_entries = fn _activities, opts ->
+        send(test_pid, {:list_entries_opts, opts})
+        {:ok, %{}}
+      end
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      assert {:ok, _today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      assert_received {:list_entries_opts, opts}
+      assert Keyword.get(opts, :from) == DateTime.add(now, -7, :day)
+    end
   end
 end

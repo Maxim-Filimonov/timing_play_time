@@ -89,16 +89,17 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   end
 
   # No Activated-At floor here (unlike get_elapsed_minutes/2, ADR-0008) — the
-  # Entry Consumption Ledger (ADR-0010) needs full history to replay
-  # consumption correctly, since Activated At carries no functional weight
-  # on the user-facing path this feeds. @beginning_of_time stands in for
-  # "no floor", since Timing has no real entries before it anyway.
+  # caller (PlayBalance) owns the actual bound via `:from`, since Activated
+  # At carries no functional weight on the user-facing path this feeds
+  # (ADR-0010). @beginning_of_time is only a fallback for a caller that
+  # omits `:from` entirely.
   defp do_list_entries(activities, client, opts) do
+    from = Keyword.get(opts, :from, @beginning_of_time)
     to = Keyword.get(opts, :to, DateTime.utc_now())
     projects = Enum.map(activities, & &1.time_source_identifier)
 
     with {:ok, entries} <-
-           fetch_projects_entries(client, projects, @beginning_of_time, to, "list_entries") do
+           fetch_projects_entries(client, projects, from, to, "list_entries") do
       {:ok, entries_by_identifier(entries, activities)}
     end
   end

@@ -73,14 +73,20 @@ defmodule TimingPlayTime.Plugins.TimeSource do
   the debug-only Play Balance reveal (ADR-0008) must keep fetching exactly
   as before — unaffected by this callback's existence.
 
-  Unlike `get_elapsed_minutes/2`, there is no adapter-owned `:from` floor
-  bounded by any Activity's Activated At: the ledger needs full history to
-  correctly replay consumption, since Activated At carries no functional
-  weight on the user-facing path this feeds (ADR-0010).
+  Unlike `get_elapsed_minutes/2`, `:from` is caller-supplied rather than
+  adapter-owned and bounded by any Activity's Activated At — Activated At
+  carries no functional weight on the user-facing path this feeds
+  (ADR-0010). Callers should pass the Entry Expiry Window's own start (`now
+  - 7 days`), not omit `:from` — the Entry Consumption Ledger's
+  reserve-overflow draw-down is oldest-`start_date`-first with no bound of
+  its own, so handed unbounded history it drains ancient, already-expired
+  entries before ever reaching anything a User can see (see
+  `TimingPlayTime.EntryLedger`'s moduledoc).
 
   ## Parameters
     * `activities` - The Activity structs to fetch entries for
     * `opts` - Options for filtering time entries:
+      * `:from` - Start datetime (defaults to unbounded — see above)
       * `:to` - End datetime (defaults to now)
 
   ## Returns
