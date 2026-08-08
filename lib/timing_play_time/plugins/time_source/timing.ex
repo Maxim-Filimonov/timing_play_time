@@ -23,6 +23,11 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   # Timing's documented single-page cap for `list_time_entries`.
   @page_size_limit 1000
 
+  # Stands in for "no floor" on list_entries/2's fetch (ADR-0010) — Timing
+  # has no real entries before this, so it behaves as an effectively
+  # unbounded start_date_min without needing to omit the parameter.
+  @beginning_of_time ~U[1970-01-01 00:00:00Z]
+
   @impl true
   def connect(credentials) do
     ExMCP.Client.start_link(
@@ -58,31 +63,9 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
     today_from = Keyword.get(opts, :today_from)
     projects = Enum.map(activities, & &1.time_source_identifier)
 
-    Logger.info(
-      "Timing.get_elapsed_minutes: calling list_time_entries " <>
-        "projects=#{inspect(projects)} from=#{iso8601_no_microseconds(from)} " <>
-        "to=#{iso8601_no_microseconds(to)}"
-    )
-
-    with {:ok, entries} <- fetch_all_entries(client, projects, from, to) do
-      totals = bucket_entries(entries, activities, today_from)
-
-      entry_word = if length(entries) == 1, do: "y", else: "ies"
-      project_word = if length(projects) == 1, do: "", else: "s"
-
-      Logger.info(
-        "Timing.get_elapsed_minutes: fetched #{length(entries)} entr#{entry_word} " <>
-          "across #{length(projects)} project#{project_word}"
-      )
-
-      {:ok, totals}
-    else
-      {:error, reason} = error ->
-        Logger.warning(
-          "Timing.get_elapsed_minutes: list_time_entries call failed: #{inspect(reason)}"
-        )
-
-        error
+    with {:ok, entries} <-
+           fetch_projects_entries(client, projects, from, to, "get_elapsed_minutes") do
+      {:ok, bucket_entries(entries, activities, today_from)}
     end
   end
 
@@ -91,6 +74,68 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   # fetch uses instead of a distinct one per Activity (ADR-0008).
   defp earliest_from(activities) do
     activities |> Enum.map(&default_from(&1.activated_at)) |> earliest()
+  end
+
+  @impl true
+  def list_entries(activities, opts \\ [])
+
+  def list_entries([], _opts), do: {:ok, %{}}
+
+  def list_entries(activities, opts) do
+    case Keyword.get(opts, :client) do
+      nil -> {:error, :not_connected}
+      client -> do_list_entries(activities, client, opts)
+    end
+  end
+
+  # No Activated-At floor here (unlike get_elapsed_minutes/2, ADR-0008) — the
+  # caller (PlayBalance) owns the actual bound via `:from`, since Activated
+  # At carries no functional weight on the user-facing path this feeds
+  # (ADR-0010). @beginning_of_time is only a fallback for a caller that
+  # omits `:from` entirely.
+  defp do_list_entries(activities, client, opts) do
+    from = Keyword.get(opts, :from, @beginning_of_time)
+    to = Keyword.get(opts, :to, DateTime.utc_now())
+    projects = Enum.map(activities, & &1.time_source_identifier)
+
+    with {:ok, entries} <-
+           fetch_projects_entries(client, projects, from, to, "list_entries") do
+      {:ok, entries_by_identifier(entries, activities)}
+    end
+  end
+
+  defp entries_by_identifier(entries, activities) do
+    group_entries_by_activity(entries, activities, fn -> [] end, fn list, entry ->
+      [dated_entry(entry) | list]
+    end)
+  end
+
+  defp dated_entry(entry) do
+    %{start_date: parse_datetime(entry["start_date"]), minutes: duration_seconds(entry) / 60}
+  end
+
+  defp fetch_projects_entries(client, projects, from, to, log_prefix) do
+    Logger.info(
+      "Timing.#{log_prefix}: calling list_time_entries " <>
+        "projects=#{inspect(projects)} from=#{iso8601_no_microseconds(from)} " <>
+        "to=#{iso8601_no_microseconds(to)}"
+    )
+
+    with {:ok, entries} <- fetch_all_entries(client, projects, from, to) do
+      entry_word = if length(entries) == 1, do: "y", else: "ies"
+      project_word = if length(projects) == 1, do: "", else: "s"
+
+      Logger.info(
+        "Timing.#{log_prefix}: fetched #{length(entries)} entr#{entry_word} " <>
+          "across #{length(projects)} project#{project_word}"
+      )
+
+      {:ok, entries}
+    else
+      {:error, reason} = error ->
+        Logger.warning("Timing.#{log_prefix}: list_time_entries call failed: #{inspect(reason)}")
+        error
+    end
   end
 
   defp earliest(datetimes) do
@@ -158,33 +203,40 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   # `today` (entries at or after `today_from`, or `nil` throughout if
   # `today_from` wasn't given).
   defp bucket_entries(entries, activities, today_from) do
+    empty = fn -> %{cumulative: 0, today: if(today_from, do: 0, else: nil)} end
+
+    entries
+    |> group_entries_by_activity(activities, empty, &add_entry(&1, &2, today_from))
+    |> Map.new(fn {id, %{cumulative: cumulative, today: today}} ->
+      {id, %{cumulative: cumulative / 60, today: if(today, do: today / 60, else: nil)}}
+    end)
+  end
+
+  # Shared by bucket_entries/3 and entries_by_identifier/2: matches each
+  # fetched entry back to the Activity whose Project it belongs to
+  # (normalized — see `strip_projects_prefix/1`), folding matched entries
+  # into a per-Activity accumulator via `empty`/`add`. Activities with no
+  # matching entries at all still get an `empty` bucket, rather than being
+  # absent from the returned map.
+  defp group_entries_by_activity(entries, activities, empty, add) do
     activity_by_project_id =
       Map.new(activities, fn activity ->
         {strip_projects_prefix(activity.time_source_identifier), activity.time_source_identifier}
       end)
 
-    empty = fn -> %{cumulative: 0, today: if(today_from, do: 0, else: nil)} end
-
-    totals =
-      Enum.reduce(entries, %{}, fn entry, totals ->
+    grouped =
+      Enum.reduce(entries, %{}, fn entry, grouped ->
         case Map.fetch(activity_by_project_id, project_id_from_entry(entry)) do
           :error ->
-            totals
+            grouped
 
           {:ok, identifier} ->
-            Map.update(totals, identifier, add_entry(empty.(), entry, today_from), fn bucket ->
-              add_entry(bucket, entry, today_from)
-            end)
+            Map.update(grouped, identifier, add.(empty.(), entry), &add.(&1, entry))
         end
       end)
 
-    # Activities with no matching entries at all still get a zeroed bucket,
-    # rather than being absent from the returned map.
-    Enum.reduce(activities, totals, fn activity, totals ->
-      Map.put_new_lazy(totals, activity.time_source_identifier, empty)
-    end)
-    |> Map.new(fn {id, %{cumulative: cumulative, today: today}} ->
-      {id, %{cumulative: cumulative / 60, today: if(today, do: today / 60, else: nil)}}
+    Enum.reduce(activities, grouped, fn activity, grouped ->
+      Map.put_new_lazy(grouped, activity.time_source_identifier, empty)
     end)
   end
 

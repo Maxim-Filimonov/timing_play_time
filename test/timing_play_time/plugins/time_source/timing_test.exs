@@ -223,4 +223,126 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
       )
     end
   end
+
+  describe "list_entries/2" do
+    test "returns {:ok, %{}} without calling the client when given no activities" do
+      assert {:ok, %{}} = Timing.list_entries([], client: :unused)
+    end
+
+    test "returns :not_connected when no client is given" do
+      assert {:error, :not_connected} = Timing.list_entries([@coding], [])
+    end
+
+    test "defaults start_date_min to the beginning of time (no Activated-At floor) when :from is omitted" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
+        fn client ->
+          assert {:ok, _entries} = Timing.list_entries([@coding], client: client)
+
+          assert_receive {:call_tool, "list_time_entries", arguments}
+          assert arguments["start_date_min"] == "1970-01-01T00:00:00Z"
+        end
+      )
+    end
+
+    test "sends the given :from (without microseconds) as start_date_min, unlike get_elapsed_minutes/2's Activated-At floor (ADR-0010)" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
+        fn client ->
+          from = ~U[2026-07-18 10:00:00.123456Z]
+
+          assert {:ok, _entries} = Timing.list_entries([@coding], client: client, from: from)
+
+          assert_receive {:call_tool, "list_time_entries", arguments}
+          assert arguments["start_date_min"] == "2026-07-18T10:00:00Z"
+        end
+      )
+    end
+
+    test "sends the given :to (without microseconds) as start_date_max" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
+        fn client ->
+          to = ~U[2026-07-26 10:00:00.123456Z]
+
+          assert {:ok, _entries} = Timing.list_entries([@coding], client: client, to: to)
+
+          assert_receive {:call_tool, "list_time_entries", arguments}
+          assert arguments["start_date_max"] == "2026-07-26T10:00:00Z"
+        end
+      )
+    end
+
+    test "returns each matched entry's start_date and minutes (not seconds), bucketed per activity" do
+      entries = [
+        %{
+          "duration" => 1800,
+          "project" => %{"self" => "/projects/coding-proj-1"},
+          "start_date" => "2026-07-20T09:00:00+00:00"
+        },
+        %{
+          "duration" => 600,
+          "project" => %{"self" => "/projects/learning-proj-1"},
+          "start_date" => "2026-07-21T09:00:00+00:00"
+        }
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          assert {:ok, by_identifier} = Timing.list_entries([@coding, @learning], client: client)
+
+          assert by_identifier["coding-proj-1"] == [
+                   %{start_date: ~U[2026-07-20 09:00:00Z], minutes: 30.0}
+                 ]
+
+          assert by_identifier["learning-proj-1"] == [
+                   %{start_date: ~U[2026-07-21 09:00:00Z], minutes: 10.0}
+                 ]
+        end
+      )
+    end
+
+    test "ignores an entry whose project doesn't match any given activity" do
+      entries = [
+        %{
+          "duration" => 1800,
+          "project" => %{"self" => "/projects/coding-proj-1"},
+          "start_date" => "2026-07-20T09:00:00+00:00"
+        },
+        %{
+          "duration" => 9999,
+          "project" => %{"self" => "/projects/some-other-project"},
+          "start_date" => "2026-07-20T09:00:00+00:00"
+        }
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          assert {:ok, by_identifier} = Timing.list_entries([@coding], client: client)
+          assert [%{minutes: 30.0}] = by_identifier["coding-proj-1"]
+        end
+      )
+    end
+
+    test "returns an empty list (not absent) for an activity with no matching entries" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: []}],
+        fn client ->
+          assert {:ok, by_identifier} = Timing.list_entries([@coding], client: client)
+          assert by_identifier["coding-proj-1"] == []
+        end
+      )
+    end
+
+    test "returns an error when the tool call reports an error" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), error: "boom"}],
+        fn client ->
+          assert {:error, {:tool_error, "boom"}} = Timing.list_entries([@coding], client: client)
+        end
+      )
+    end
+  end
 end
