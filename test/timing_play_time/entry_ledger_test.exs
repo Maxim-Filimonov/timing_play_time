@@ -126,6 +126,32 @@ defmodule TimingPlayTime.EntryLedgerTest do
     end
   end
 
+  describe "load/4" do
+    test "fetches with no :from present, regardless of how many times it's called" do
+      test_pid = self()
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      now = ~U[2026-07-25 10:00:00Z]
+
+      list_entries = fn _activities, opts ->
+        send(test_pid, {:list_entries_opts, opts})
+        {:ok, %{}}
+      end
+
+      EntryLedger.load(activities, now, [], list_entries)
+
+      assert_received {:list_entries_opts, opts}
+      refute Keyword.has_key?(opts, :from)
+      assert Keyword.get(opts, :to) == now
+    end
+
+    test "swallows a fetch error to an empty map rather than propagating it" do
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      list_entries = fn _activities, _opts -> {:error, :boom} end
+
+      assert EntryLedger.load(activities, ~U[2026-07-25 10:00:00Z], [], list_entries) == %{}
+    end
+  end
+
   describe "replay/3 deficit" do
     test "is zero when every usage is fully covered" do
       entries = [%{activity_id: "coding", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}]

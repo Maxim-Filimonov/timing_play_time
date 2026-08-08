@@ -110,56 +110,51 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert balance.total == 0.0
     end
 
-    test "fetches every activity's elapsed minutes in a single call to the plural fetcher", %{
-      user: user
-    } do
-      {:ok, _} =
-        PersistenceStub.create_activity(user.id, %{
-          name: "Coding",
-          time_source_identifier: "coding-proj-1",
-          multiplier: 1.0,
-          activated_at: DateTime.add(DateTime.utc_now(), -1, :day)
-        })
+  end
 
-      {:ok, _} =
-        PersistenceStub.create_activity(user.id, %{
-          name: "Learning",
-          time_source_identifier: "learning-proj-1",
-          multiplier: 1.0,
-          activated_at: DateTime.add(DateTime.utc_now(), -1, :day)
-        })
-
+  describe "get_totals/3" do
+    test "fetches every given activity's elapsed minutes in a single call to the plural fetcher" do
       test_pid = self()
 
-      get_elapsed_minutes = fn activities, opts ->
+      activities = [
+        %{time_source_identifier: "coding-proj-1", activated_at: DateTime.utc_now()},
+        %{time_source_identifier: "learning-proj-1", activated_at: DateTime.utc_now()}
+      ]
+
+      get_elapsed_minutes = fn given_activities, opts ->
         send(test_pid, :fetch_called)
-        TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes(activities, opts)
+        TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes(given_activities, opts)
       end
 
-      assert {:ok, _balance} = PlayBalance.compute(user, [], get_elapsed_minutes)
+      assert %{"coding-proj-1" => _, "learning-proj-1" => _} =
+               PlayBalance.get_totals(activities, [], get_elapsed_minutes)
 
       assert_received :fetch_called
       refute_received :fetch_called
     end
 
-    test "zeroes the timing-derived total (rather than erroring) when the fetcher fails", %{
-      user: user
-    } do
-      {:ok, _} =
-        PersistenceStub.create_activity(user.id, %{
-          name: "Coding",
-          time_source_identifier: "coding-proj-1",
-          multiplier: 1.0,
-          activated_at: DateTime.add(DateTime.utc_now(), -1, :day)
-        })
-
-      {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 5.0)
-
+    test "returns an empty map (rather than erroring) when the fetcher fails" do
       get_elapsed_minutes = fn _activities, _opts -> {:error, :boom} end
 
-      assert {:ok, balance} = PlayBalance.compute(user, [], get_elapsed_minutes)
-      assert balance.timing_derived_total == 0.0
-      assert balance.total == 5.0
+      assert PlayBalance.get_totals([%{time_source_identifier: "coding-proj-1"}], [], get_elapsed_minutes) ==
+               %{}
+    end
+  end
+
+  describe "activity_today_minutes/2" do
+    test "looks up the activity's :today total from a pre-fetched totals map and applies its multiplier" do
+      activity = %{time_source_identifier: "coding-proj-1", multiplier: 2.0}
+      totals = %{"coding-proj-1" => %{cumulative: 999.0, today: 15.0}}
+
+      assert PlayBalance.activity_today_minutes(totals, activity) ==
+               %{minutes: 15.0, play_minutes: 30.0}
+    end
+
+    test "returns zero when the activity's identifier isn't present in totals" do
+      activity = %{time_source_identifier: "coding-proj-1", multiplier: 2.0}
+
+      assert PlayBalance.activity_today_minutes(%{}, activity) ==
+               %{minutes: 0.0, play_minutes: 0.0}
     end
   end
 
@@ -225,18 +220,15 @@ defmodule TimingPlayTime.PlayBalanceTest do
           activated_at: ~U[2026-01-01 00:00:00Z]
         })
 
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -3, :day), minutes: 30.0},
-             %{start_date: DateTime.add(now, -1, :day), minutes: 10.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -3, :day), minutes: 30.0},
+          %{start_date: DateTime.add(now, -1, :day), minutes: 10.0}
+        ]
+      }
 
       assert {:ok, %{minutes: 40.0, play_minutes: 80.0}} =
-               PlayBalance.week_activity_minutes(activity, now, list_entries)
+               PlayBalance.week_activity_minutes(activity, now, [], raw_entries)
     end
 
     test "excludes an entry more than 7 days old (the exact rolling Entry Expiry Window cutoff)", %{
@@ -252,41 +244,15 @@ defmodule TimingPlayTime.PlayBalanceTest do
           activated_at: ~U[2026-01-01 00:00:00Z]
         })
 
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -7 * 24 * 60 - 1, :minute), minutes: 100.0},
-             %{start_date: DateTime.add(now, -1, :day), minutes: 10.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -7 * 24 * 60 - 1, :minute), minutes: 100.0},
+          %{start_date: DateTime.add(now, -1, :day), minutes: 10.0}
+        ]
+      }
 
       assert {:ok, %{minutes: 10.0, play_minutes: 10.0}} =
-               PlayBalance.week_activity_minutes(activity, now, list_entries)
-    end
-
-    test "requests the fetch itself bounded to the window's start", %{user: user} do
-      now = ~U[2026-07-25 10:00:00Z]
-      test_pid = self()
-
-      {:ok, activity} =
-        PersistenceStub.create_activity(user.id, %{
-          name: "Coding",
-          time_source_identifier: "coding-proj-1",
-          multiplier: 1.0,
-          activated_at: ~U[2026-01-01 00:00:00Z]
-        })
-
-      list_entries = fn _activities, opts ->
-        send(test_pid, {:list_entries_opts, opts})
-        {:ok, %{}}
-      end
-
-      assert {:ok, _} = PlayBalance.week_activity_minutes(activity, now, list_entries)
-
-      assert_received {:list_entries_opts, opts}
-      assert Keyword.get(opts, :from) == DateTime.add(now, -7, :day)
+               PlayBalance.week_activity_minutes(activity, now, [], raw_entries)
     end
 
     test "returns zero for an activity with no entries", %{user: user} do
@@ -298,10 +264,8 @@ defmodule TimingPlayTime.PlayBalanceTest do
           activated_at: ~U[2026-01-01 00:00:00Z]
         })
 
-      list_entries = fn _activities, _opts -> {:ok, %{}} end
-
       assert {:ok, %{minutes: minutes, play_minutes: play_minutes}} =
-               PlayBalance.week_activity_minutes(activity, DateTime.utc_now(), list_entries)
+               PlayBalance.week_activity_minutes(activity, DateTime.utc_now(), [], %{})
 
       assert minutes == 0.0
       assert play_minutes == 0.0
@@ -330,13 +294,11 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # This is exactly the scenario that makes `today_net + reserve` hard
       # to eyeball against `earned_today`/`used_today` — week_earned/
       # week_used sidesteps it entirely.
-      list_entries = fn _activities, _opts ->
-        {:ok, %{"coding-proj-1" => [%{start_date: ~U[2026-07-25 09:00:00Z], minutes: 30.0}]}}
-      end
+      raw_entries = %{"coding-proj-1" => [%{start_date: ~U[2026-07-25 09:00:00Z], minutes: 30.0}]}
 
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 50.0, ~U[2026-07-25 08:00:00Z])
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert today.earned_today == 30.0
       assert today.used_today == 50.0
@@ -376,21 +338,18 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 12.0)
 
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -5, :day), minutes: 20.0},
-             %{start_date: now, minutes: 15.0}
-           ],
-           "learning-proj-1" => [%{start_date: DateTime.add(now, -2, :day), minutes: 40.0}]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -5, :day), minutes: 20.0},
+          %{start_date: now, minutes: 15.0}
+        ],
+        "learning-proj-1" => [%{start_date: DateTime.add(now, -2, :day), minutes: 40.0}]
+      }
 
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 10.0, DateTime.add(now, -4, :day))
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 55.0, now)
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert_in_delta today.playtime,
                        today.week_earned - today.week_used + today.backlog_drawn +
@@ -413,19 +372,16 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # A large, older-than-the-window entry (still unspent) plus a small
       # in-window one — this week's spend exceeds this week's own earning
       # (20.0), so the overflow has to reach the older entry.
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -30, :day), minutes: 500.0},
-             %{start_date: DateTime.add(now, -3, :day), minutes: 20.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -30, :day), minutes: 500.0},
+          %{start_date: DateTime.add(now, -3, :day), minutes: 20.0}
+        ]
+      }
 
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 70.0, DateTime.add(now, -1, :day))
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert today.week_earned == 20.0
       assert today.week_used == 70.0
@@ -463,17 +419,14 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       # Raw (pre-multiplier) Timing minutes: a reserve entry (5 days back,
       # within the 7-day Entry Expiry Window) and a today entry.
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: ~U[2026-07-20 09:00:00Z], minutes: 50.0},
-             %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-20 09:00:00Z], minutes: 50.0},
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0}
+        ]
+      }
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       # Today's entry: 10.0 * 2.0 multiplier = 20.0, unaffected by consumption.
       assert today.earned_today == 20.0
@@ -489,7 +442,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.playtime == 85.0
     end
 
-    test "zeroes every activity's totals for the computation when the fetcher errors (ADR-0008's shared failure blast radius)",
+    test "zeroes every activity's totals for the computation when raw_entries is an empty map (ADR-0008's shared failure blast radius, now handled by EntryLedger.load/4's own swallow)",
          %{user: user} do
       {:ok, _activity} =
         PersistenceStub.create_activity(user.id, %{
@@ -502,9 +455,8 @@ defmodule TimingPlayTime.PlayBalanceTest do
       {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 10.0)
 
       now = ~U[2026-07-25 10:00:00Z]
-      list_entries = fn _activities, _opts -> {:error, :boom} end
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], %{})
 
       assert today.earned_today == 0.0
       assert today.reserve == 10.0
@@ -546,14 +498,11 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       # Exactly on the boundary: 7 days and 1 minute before `now`, so just
       # outside the window (an exact rolling cutoff, not calendar-aligned).
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -7 * 24 * 60 - 1, :minute), minutes: 100.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -7 * 24 * 60 - 1, :minute), minutes: 100.0}
+        ]
+      }
 
       {:ok, _} =
         PersistenceStub.create_activity(user.id, %{
@@ -563,7 +512,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
           activated_at: ~U[2026-01-01 00:00:00Z]
         })
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert today.reserve == 0.0
       assert today.playtime == 0.0
@@ -575,10 +524,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       # Fully spent (100 earned, 100 used) 8 days ago — outside the window,
       # but its consumption shouldn't leave any residual debt behind either.
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{"coding-proj-1" => [%{start_date: DateTime.add(now, -8, :day), minutes: 100.0}]}}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: DateTime.add(now, -8, :day), minutes: 100.0}]
+      }
 
       {:ok, _} =
         PersistenceStub.create_activity(user.id, %{
@@ -590,7 +538,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 100.0, DateTime.add(now, -8, :day))
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert today.reserve == 0.0
       assert today.playtime == 0.0
@@ -605,15 +553,12 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # Oldest-first FIFO must not let a spend hide inside the invisible
       # backlog forever — the caller is responsible for not handing the
       # ledger that backlog at all (EntryLedger's moduledoc).
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -90, :day), minutes: 10_000.0},
-             %{start_date: DateTime.add(now, -3, :day), minutes: 50.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -90, :day), minutes: 10_000.0},
+          %{start_date: DateTime.add(now, -3, :day), minutes: 50.0}
+        ]
+      }
 
       {:ok, _} =
         PersistenceStub.create_activity(user.id, %{
@@ -625,42 +570,12 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 30.0, now)
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       # The 3-day-old reserve entry (50.0) must absorb the spend — the
       # 90-day-old entry is outside the window and unreachable.
       assert today.reserve == 20.0
       assert today.playtime == 20.0
-    end
-
-    test "fetches entries unbounded (no :from), not clipped to the Entry Expiry Window's start",
-         %{user: user} do
-      now = ~U[2026-07-25 10:00:00Z]
-      test_pid = self()
-
-      # A bounded fetch would silently drop entries the ledger needs to
-      # correctly replay a still-in-window usage that drew on an
-      # already-expired entry (see the "an entry that expires after
-      # funding a still-recent usage" test below) — Reserve is protected
-      # from an ancient backlog instead via EntryLedger.replay/4's
-      # window_start-based draw-down priority, not by bounding this fetch.
-      list_entries = fn _activities, opts ->
-        send(test_pid, {:list_entries_opts, opts})
-        {:ok, %{}}
-      end
-
-      {:ok, _} =
-        PersistenceStub.create_activity(user.id, %{
-          name: "Coding",
-          time_source_identifier: "coding-proj-1",
-          multiplier: 1.0,
-          activated_at: ~U[2026-01-01 00:00:00Z]
-        })
-
-      assert {:ok, _today} = PlayBalance.compute_today(user, now, [], list_entries)
-
-      assert_received {:list_entries_opts, opts}
-      refute Keyword.has_key?(opts, :from)
     end
 
     test "an entry that expires after funding a still-recent usage doesn't re-draw from today's fresh entries",
@@ -672,15 +587,12 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # has since aged out (>7 days), but the usage that drained it hasn't
       # (only 6 days old). Separately, today a fresh 50-min entry is earned,
       # untouched by any spend.
-      list_entries = fn _activities, _opts ->
-        {:ok,
-         %{
-           "coding-proj-1" => [
-             %{start_date: DateTime.add(now, -8, :day), minutes: 100.0},
-             %{start_date: now, minutes: 50.0}
-           ]
-         }}
-      end
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -8, :day), minutes: 100.0},
+          %{start_date: now, minutes: 50.0}
+        ]
+      }
 
       {:ok, _} =
         PersistenceStub.create_activity(user.id, %{
@@ -692,7 +604,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       {:ok, _} = PersistenceStub.log_playtime_used(user.id, 100.0, DateTime.add(now, -6, :day))
 
-      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       # Expected: the 8-day-old entry is gone (expired), but it already
       # absorbed the 6-day-old usage back when both existed — so today's

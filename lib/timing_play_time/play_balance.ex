@@ -12,6 +12,7 @@ defmodule TimingPlayTime.PlayBalance do
 
   alias TimingPlayTime.EntryLedger
   alias TimingPlayTime.LocalDay
+  alias TimingPlayTime.PlayBalance.Today
   alias TimingPlayTime.PlaytimeUsed
 
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
@@ -23,12 +24,11 @@ defmodule TimingPlayTime.PlayBalance do
 
   @doc """
   The Entry Expiry Window's start (ADR-0010): an exact rolling cutoff
-  `now - 7 days`, not aligned to local calendar days. Exposed so callers
-  fetching `list_entries/2` results themselves (e.g. the dashboard,
-  prefetching once for both `compute_today/4` and a per-Activity "This
-  Week" figure) can bound that fetch to the same window `compute_today/4`
-  uses internally, rather than fetching unbounded history and relying on
-  this module to filter it back down to size.
+  `now - 7 days`, not aligned to local calendar days. Exposed for display
+  (e.g. `Mix.Tasks.Balance.Snapshot` prints it) — `compute_today/4` and
+  `week_activity_minutes/4` both use it internally to filter their
+  already-loaded entries down to the window, not to bound the fetch itself
+  (see `EntryLedger.load/4`'s moduledoc for why the fetch stays unbounded).
 
   ## Examples
 
@@ -62,16 +62,12 @@ defmodule TimingPlayTime.PlayBalance do
         playtime_used_total: 45.0
       }}
   """
-  def compute(
-        user,
-        time_source_opts \\ [],
-        get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
-      ) do
+  def compute(user, time_source_opts \\ [], totals \\ nil) do
     with {:ok, activities} <- @persistence.list_activities(user.id),
          {:ok, manual_sync} <- get_manual_sync_total(user),
          {:ok, playtime_used} <- get_playtime_used_total(user) do
-      timing_derived =
-        compute_timing_derived_total(activities, time_source_opts, get_elapsed_minutes)
+      totals = totals || get_totals(activities, time_source_opts)
+      timing_derived = sum_totals(activities, totals, :cumulative)
 
       balance = %{
         timing_derived_total: timing_derived,
@@ -109,9 +105,20 @@ defmodule TimingPlayTime.PlayBalance do
     today_from = LocalDay.start_of_today(user.timezone, now)
 
     with {:ok, totals} <- get_elapsed_minutes.([activity], to: now, today_from: today_from) do
-      minutes = minutes_for(totals, activity, :today)
-      {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
+      {:ok, activity_today_minutes(totals, activity)}
     end
+  end
+
+  @doc """
+  Pulls one Activity's `:today` figure out of an already-fetched `totals`
+  map (the shape `get_totals/3`/`get_elapsed_minutes/2` return) and applies
+  its Multiplier — no fetch of its own, so a caller sharing one fetch
+  across several Activities (e.g. `DashboardLive`) can call this directly
+  instead of going through `today_activity_minutes/4`'s own fetch.
+  """
+  def activity_today_minutes(totals, activity) do
+    minutes = minutes_for(totals, activity, :today)
+    %{minutes: minutes, play_minutes: minutes * activity.multiplier}
   end
 
   @doc """
@@ -121,14 +128,21 @@ defmodule TimingPlayTime.PlayBalance do
   is), for the dashboard's per-Activity "This Week" figure.
 
   Unlike `today_activity_minutes/4` (which uses `get_elapsed_minutes/2`'s
-  pre-aggregated cumulative/today totals), this uses `list_entries/2`'s
-  individual dated entries, since an arbitrary 7-day window needs entry
-  dates to filter by, not a pre-aggregated sum. This is the raw earned
-  total, not net of any spending — Playtime Used draws from a single global
-  pool, not a per-Activity one (see CONTEXT.md's Playtime Used entry), so
-  there's no meaningful way to net a spend against one Activity's figure
-  alone the way `PlayBalance.compute_today/4`'s ledger nets the User's
-  total.
+  pre-aggregated cumulative/today totals), this uses individual dated
+  entries (`EntryLedger.load/4`), since an arbitrary 7-day window needs
+  entry dates to filter by, not a pre-aggregated sum. This is the raw
+  earned total, not net of any spending — Playtime Used draws from a
+  single global pool, not a per-Activity one (see CONTEXT.md's Playtime
+  Used entry), so there's no meaningful way to net a spend against one
+  Activity's figure alone the way `PlayBalance.compute_today/4`'s ledger
+  nets the User's total.
+
+  `raw_entries` — when given (e.g. by `DashboardLive`, sharing one fetch
+  across every Activity and `compute_today/4`) — is `EntryLedger.load/4`'s
+  return shape, keyed by `time_source_identifier`. When omitted, this
+  fetches it itself via `EntryLedger.load/4`, unbounded (see that
+  function's moduledoc for why) — filtering down to the window happens
+  here either way, so the wider input doesn't change the result.
 
   ## Examples
 
@@ -138,19 +152,19 @@ defmodule TimingPlayTime.PlayBalance do
   def week_activity_minutes(
         activity,
         now \\ DateTime.utc_now(),
-        list_entries \\ &@time_source.list_entries/2
+        time_source_opts \\ [],
+        raw_entries \\ nil
       ) do
     window_start = expiry_window_start(now)
+    raw_entries = raw_entries || EntryLedger.load([activity], now, time_source_opts)
 
-    with {:ok, entries_by_identifier} <- list_entries.([activity], from: window_start, to: now) do
-      minutes =
-        entries_by_identifier
-        |> Map.get(activity.time_source_identifier, [])
-        |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
-        |> Enum.reduce(0.0, &(&2 + &1.minutes))
+    minutes =
+      raw_entries
+      |> Map.get(activity.time_source_identifier, [])
+      |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
+      |> Enum.reduce(0.0, &(&2 + &1.minutes))
 
-      {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
-    end
+    {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
   end
 
   @doc """
@@ -218,22 +232,20 @@ defmodule TimingPlayTime.PlayBalance do
   older backlog — an expected, not edge-case, situation once Reserve is
   allowed to carry a balance across weeks at all.
 
-  **`playtime == week_earned - week_used + backlog_drawn +
-  pushscroll_balance`, exactly, always** — the ledger's `:deficit` is *by
-  construction* the part of `week_used` that didn't come out of *any*
-  entry's `remaining`, in-window or not (`consumed_in_window +
-  backlog_drawn + deficit == week_used`), so it cancels out of this
-  identity algebraically even though it's very much present inside
-  `today_net`/`reserve`'s own math. This is what makes `week_earned`/
-  `week_used`/`backlog_drawn` worth showing on their own next to
-  `playtime` — unlike `today_net + reserve`, this decomposition needs no
-  explanation of flooring, causality, or where deficit went to visibly
-  check the arithmetic.
+  See `TimingPlayTime.PlayBalance.Today` for the full field-by-field
+  breakdown, including the `playtime == week_earned - week_used +
+  backlog_drawn + pushscroll_balance` reconciliation identity.
+
+  `raw_entries` — when given (e.g. by `DashboardLive`, sharing one fetch
+  across `week_activity_minutes/4` too) — is `EntryLedger.load/4`'s return
+  shape, keyed by `time_source_identifier`, and **must be unbounded** (see
+  `EntryLedger`'s moduledoc for why). When omitted, this fetches it itself
+  via `EntryLedger.load/4`.
 
   ## Examples
 
       iex> PlayBalance.compute_today(user)
-      {:ok, %{
+      {:ok, %TimingPlayTime.PlayBalance.Today{
         earned_today: 27.5,
         used_today: 10.0,
         week_earned: 120.0,
@@ -250,7 +262,7 @@ defmodule TimingPlayTime.PlayBalance do
         user,
         now \\ DateTime.utc_now(),
         time_source_opts \\ [],
-        list_entries \\ &@time_source.list_entries/2
+        raw_entries \\ nil
       ) do
     today_from = LocalDay.start_of_today(user.timezone, now)
     window_start = expiry_window_start(now)
@@ -259,13 +271,7 @@ defmodule TimingPlayTime.PlayBalance do
          {:ok, pushscroll_balance} <- get_manual_sync_total(user),
          {:ok, usages} <- PlaytimeUsed.list_all(user.id),
          {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now) do
-      # Unbounded (no :from) — the ledger needs full history to correctly
-      # replay consumption, since a usage still inside the window can have
-      # drawn on an entry now outside it (see the moduledoc above and
-      # EntryLedger's). Only the *display* windowing below (`week_entries`,
-      # `in_window`) is bounded to the Entry Expiry Window.
-      opts = [to: now] ++ time_source_opts
-      raw_entries = fetch_entries(activities, opts, list_entries)
+      raw_entries = raw_entries || EntryLedger.load(activities, now, time_source_opts)
       ledger_entries = build_ledger_entries(activities, raw_entries)
 
       week_entries =
@@ -297,7 +303,7 @@ defmodule TimingPlayTime.PlayBalance do
       backlog_drawn = Enum.reduce(out_of_window, 0.0, &(&2 + (&1.play_minutes - &1.remaining)))
 
       {:ok,
-       %{
+       %Today{
          earned_today: earned_today,
          used_today: used_today,
          week_earned: week_earned,
@@ -312,22 +318,21 @@ defmodule TimingPlayTime.PlayBalance do
     end
   end
 
-  # Private functions
-
-  defp compute_timing_derived_total(activities, time_source_opts, get_elapsed_minutes) do
-    totals = fetch_totals(activities, time_source_opts, get_elapsed_minutes)
-    sum_totals(activities, totals, :cumulative)
-  end
-
-  # A single Timing fetch failure zeroes every Activity's totals for this
-  # computation (ADR-0008's accepted shared failure blast radius) rather
-  # than isolating the failure to just one Activity.
-  defp fetch_totals(activities, time_source_opts, get_elapsed_minutes) do
-    case get_elapsed_minutes.(activities, time_source_opts) do
+  @doc """
+  Fetches every given Activity's cumulative and today-scoped elapsed
+  minutes in one call (ADR-0008), via the `TimeSource` plug-in contract
+  (ADR-0002). A single fetch failure zeroes every Activity's totals for
+  the computation (ADR-0008's accepted shared failure blast radius)
+  rather than isolating the failure to just one Activity.
+  """
+  def get_totals(activities, opts \\ [], get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2) do
+    case get_elapsed_minutes.(activities, opts) do
       {:ok, totals} -> totals
       {:error, _reason} -> %{}
     end
   end
+
+  # Private functions
 
   defp sum_totals(activities, totals, key) do
     Enum.reduce(activities, 0.0, fn activity, acc ->
@@ -348,15 +353,6 @@ defmodule TimingPlayTime.PlayBalance do
 
   defp get_playtime_used_total(user) do
     @persistence.total_playtime_used(user.id)
-  end
-
-  # A fetch failure zeroes every Activity's entries for this computation
-  # (mirrors fetch_totals/3's ADR-0008 shared failure blast radius).
-  defp fetch_entries(activities, opts, list_entries) do
-    case list_entries.(activities, opts) do
-      {:ok, entries} -> entries
-      {:error, _reason} -> %{}
-    end
   end
 
   # Applies each Activity's Multiplier to its raw Timing entries, tagging

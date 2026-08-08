@@ -178,11 +178,10 @@ defmodule Mix.Tasks.Balance.Snapshot do
       Mix.shell().info("-- Activities (#{length(activities)}) --")
 
       get_elapsed_minutes = fn acts, opts -> @time_source.get_elapsed_minutes(acts, opts ++ time_source_opts) end
-      list_entries = fn acts, opts -> @time_source.list_entries(acts, opts ++ time_source_opts) end
 
       Enum.each(activities, fn activity ->
         today = PlayBalance.today_activity_minutes(activity, user, now, get_elapsed_minutes)
-        week = PlayBalance.week_activity_minutes(activity, now, list_entries)
+        week = PlayBalance.week_activity_minutes(activity, now, time_source_opts)
 
         Mix.shell().info(
           "  #{activity.name} (x#{activity.multiplier}, #{activity.time_source_identifier}): " <>

@@ -19,17 +19,25 @@ defmodule TimingPlayTime.EntryLedger do
   Computed live on every read — no persisted ledger state, consistent with
   this app's "recomputed fresh" pattern.
 
-  **The caller should hand `replay/4` full, unwindowed `entries` history**
-  (`PlayBalance.compute_today/4` does this) — pre-filtering entries to the
-  Entry Expiry Window before replay was tried and reverted: a usage still
-  inside the window can have chronologically drawn on an entry that's
-  since aged out (the entry is always at least as old as the usage that
-  drew on it, so it can cross the window boundary first), and excluding
-  that entry from the pool made the replay re-litigate already-settled
-  consumption against whatever's currently visible instead, corrupting
-  Reserve. Only `usages` should be pre-filtered to the window — a usage
-  older than the window could never have touched an entry still inside it
-  (causality), so dropping it is always safe.
+  **`replay/4` needs full, unwindowed `entries` history** — pre-filtering
+  entries to the Entry Expiry Window before replay was tried and reverted:
+  a usage still inside the window can have chronologically drawn on an
+  entry that's since aged out (the entry is always at least as old as the
+  usage that drew on it, so it can cross the window boundary first), and
+  excluding that entry from the pool made the replay re-litigate
+  already-settled consumption against whatever's currently visible
+  instead, corrupting Reserve. Only `usages` should be pre-filtered to the
+  window — a usage older than the window could never have touched an
+  entry still inside it (causality), so dropping it is always safe.
+
+  **`load/4` is the one sanctioned way to fetch `entries` for `replay/4`**
+  (`PlayBalance.compute_today/4` and `week_activity_minutes/4` both use
+  it, directly or via their own default) — it fetches unbounded, with no
+  `:from` option exposed at all, so a caller can't accidentally re-narrow
+  the fetch the way three separate bug-fix commits each had to correct
+  (see this module's git history). Anything that needs entries for
+  ledger-adjacent figures should go through `load/4`, not call the
+  `TimeSource` adapter's `list_entries/2` directly.
 
   The optional `window_start` tells the reserve-overflow pass which
   entries are still Reserve-visible *right now*, so a fresh spend prefers
@@ -43,6 +51,8 @@ defmodule TimingPlayTime.EntryLedger do
   """
 
   alias TimingPlayTime.LocalDay
+
+  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
   @type entry :: %{
           required(:activity_id) => term(),
@@ -64,6 +74,32 @@ defmodule TimingPlayTime.EntryLedger do
         }
 
   @type receipt :: %{usage_id: term(), breakdown: %{optional(term()) => float()}}
+
+  @doc """
+  Fetches every given Activity's individual time entries via the
+  `TimeSource` plug-in contract (ADR-0002), for `replay/4`. Always
+  unbounded — no `:from` option exists here, deliberately (see this
+  module's moduledoc): this is the one place that decides how much
+  history to fetch for ledger-adjacent figures, so no caller can
+  accidentally re-narrow it. A fetch failure returns an empty map rather
+  than propagating the error (mirrors `PlayBalance.get_totals/3`'s same
+  swallow).
+  """
+  @spec load([map()], DateTime.t(), keyword(), (list(), keyword() -> {:ok, map()} | {:error, term()})) ::
+          %{optional(String.t()) => [%{start_date: DateTime.t(), minutes: float()}]}
+  def load(
+        activities,
+        now \\ DateTime.utc_now(),
+        time_source_opts \\ [],
+        list_entries \\ &@time_source.list_entries/2
+      ) do
+    opts = [to: now] ++ time_source_opts
+
+    case list_entries.(activities, opts) do
+      {:ok, entries} -> entries
+      {:error, _reason} -> %{}
+    end
+  end
 
   @doc """
   Replays `usages` (any order) against `entries` (any order) in
