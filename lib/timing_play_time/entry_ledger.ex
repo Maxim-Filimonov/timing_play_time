@@ -19,18 +19,27 @@ defmodule TimingPlayTime.EntryLedger do
   Computed live on every read — no persisted ledger state, consistent with
   this app's "recomputed fresh" pattern.
 
-  **The caller is responsible for windowing `entries` and `usages` to the
-  Entry Expiry Window before calling `replay/3`** (`PlayBalance.compute_today/4`
-  does this). Reserve-overflow consumption is oldest-`start_date`-first
-  with no bound of its own — handed unbounded, all-time history, it drains
-  ancient, already-expired-and-invisible entries before ever touching
-  anything a User can see, so new spending would appear to do nothing
-  until that backlog exhausts. Entries and usages both aging out of the
-  window in lockstep (rather than entries alone) is what makes "spend now"
-  visibly reduce Reserve immediately, and is also what keeps Reserve from
-  drifting ever more negative over time (ADR-0010's rejected "simple
-  aggregate" alternative had this failure precisely because *only* earned
-  was windowed while *used* stayed all-time).
+  **The caller should hand `replay/4` full, unwindowed `entries` history**
+  (`PlayBalance.compute_today/4` does this) — pre-filtering entries to the
+  Entry Expiry Window before replay was tried and reverted: a usage still
+  inside the window can have chronologically drawn on an entry that's
+  since aged out (the entry is always at least as old as the usage that
+  drew on it, so it can cross the window boundary first), and excluding
+  that entry from the pool made the replay re-litigate already-settled
+  consumption against whatever's currently visible instead, corrupting
+  Reserve. Only `usages` should be pre-filtered to the window — a usage
+  older than the window could never have touched an entry still inside it
+  (causality), so dropping it is always safe.
+
+  The optional `window_start` tells the reserve-overflow pass which
+  entries are still Reserve-visible *right now*, so a fresh spend prefers
+  to draw them down first rather than an ancient, already-invisible
+  backlog silently absorbing it (entries are still tried oldest-first
+  within each of the two priority groups — visible-now, then
+  no-longer-visible — so causality and FIFO ordering are preserved within
+  each group; only the group boundary is new). Omit it (or pass `nil`) for
+  pure oldest-first-across-all-time FIFO, e.g. in tests that don't care
+  about windowing.
   """
 
   alias TimingPlayTime.LocalDay
@@ -71,12 +80,12 @@ defmodule TimingPlayTime.EntryLedger do
       entry available (across both passes) at the moment that usage was
       logged — spend with nothing left to draw from, at that point in time
   """
-  @spec replay([entry()], [usage()], String.t()) :: %{
+  @spec replay([entry()], [usage()], String.t(), DateTime.t() | nil) :: %{
           entries: [replayed_entry()],
           receipts: [receipt()],
           deficit: float()
         }
-  def replay(entries, usages, timezone) do
+  def replay(entries, usages, timezone, window_start \\ nil) do
     # Each entry carries its own map key as :ledger_id, so consume_pool/4 can
     # write a draw-down back to entries_by_id after filtering/sorting a given
     # usage's own copy of the pool into a plain list.
@@ -91,7 +100,11 @@ defmodule TimingPlayTime.EntryLedger do
     sorted_usages = Enum.sort_by(usages, & &1.logged_at, DateTime)
 
     {final_entries, receipts, deficit} =
-      Enum.reduce(sorted_usages, {indexed_entries, %{}, 0.0}, &replay_usage(&1, &2, timezone))
+      Enum.reduce(
+        sorted_usages,
+        {indexed_entries, %{}, 0.0},
+        &replay_usage(&1, &2, timezone, window_start)
+      )
 
     %{
       entries:
@@ -104,7 +117,7 @@ defmodule TimingPlayTime.EntryLedger do
     }
   end
 
-  defp replay_usage(usage, {entries_by_id, receipts, deficit}, timezone) do
+  defp replay_usage(usage, {entries_by_id, receipts, deficit}, timezone, window_start) do
     day_start = LocalDay.start_of_today(timezone, usage.logged_at)
 
     exists_by_now? = &(DateTime.compare(&1.start_date, usage.logged_at) != :gt)
@@ -118,6 +131,8 @@ defmodule TimingPlayTime.EntryLedger do
     {today_pool, reserve_pool} =
       Enum.split_with(available, &(DateTime.compare(&1.start_date, day_start) != :lt))
 
+    reserve_pool = prioritize_visible(reserve_pool, window_start)
+
     {entries_by_id, spent_from, remaining_demand} =
       consume_pool(today_pool, usage.minutes, entries_by_id, [])
 
@@ -127,6 +142,16 @@ defmodule TimingPlayTime.EntryLedger do
     receipt = %{usage_id: usage.id, breakdown: aggregate_by_activity(spent_from)}
 
     {entries_by_id, Map.put(receipts, usage.id, receipt), deficit + remaining_demand}
+  end
+
+  # Stable-sorts an already oldest-first `pool` so entries still inside the
+  # Entry Expiry Window are drawn from before older, already-invisible
+  # backlog — oldest-first is preserved within each of those two groups
+  # since Enum.sort_by is a stable sort over an already-sorted input.
+  defp prioritize_visible(pool, nil), do: pool
+
+  defp prioritize_visible(pool, window_start) do
+    Enum.sort_by(pool, &(DateTime.compare(&1.start_date, window_start) == :lt))
   end
 
   defp consume_pool(pool, demand, entries_by_id, spent_from) when demand <= 0 or pool == [] do

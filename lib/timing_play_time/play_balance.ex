@@ -161,22 +161,29 @@ defmodule TimingPlayTime.PlayBalance do
 
   `today_net` and `reserve` are ledger-based (ADR-0010), not simple
   subtraction: every Playtime Used record *within the Entry Expiry Window*
-  is replayed, oldest first, against individual Timing entries *also
-  within the window* — each usage consumes its own local day's entries
-  first, then older entries (oldest `start_date` first) as overflow. Both
-  sides of the ledger are windowed together, not just the earned side —
-  handing `TimingPlayTime.EntryLedger` unbounded all-time history instead
-  would let its oldest-first draw-down silently drain ancient,
-  already-expired entries no User can see before ever reaching Reserve, so
-  new spending would appear to do nothing until that backlog exhausts.
-  Because consumption is tracked per-entry, an entry aging out of the
-  window (more than 7 days since its own `start_date`) takes any
-  already-recorded spend against it with it — unlike a raw running "used"
-  total, this can never re-count as debt against a User once the entries it
-  drew from are gone (see ADR-0010's rejected "simple aggregate"
-  alternative). A usage older than the window is excluded from the replay
-  entirely rather than just from display, for the same reason: causality
-  means it could never have touched anything still in-window anyway.
+  is replayed, oldest first, against individual Timing entries — each
+  usage consumes its own local day's entries first, then older entries as
+  overflow. Only `usages` are pre-filtered to the window before replay,
+  not `entries`: an entry is always at least as old as any usage it funded
+  (causality), so it can cross the window boundary and expire *before*
+  that usage does — pre-filtering entries the same way was tried and
+  reverted (see `TimingPlayTime.EntryLedger`'s moduledoc) because it made
+  the replay re-litigate that already-settled consumption against
+  whatever's currently visible instead, corrupting Reserve. A usage older
+  than the window is still excluded from the replay entirely, because
+  causality means it could never have touched anything still in-window
+  anyway.
+
+  The overflow pass draws window-visible entries before older,
+  already-invisible backlog (`EntryLedger.replay/4`'s `window_start`),
+  oldest-first within each group — so a fresh spend still visibly draws
+  down Reserve rather than a huge, ancient, already-expired backlog
+  silently absorbing it first. Because consumption is tracked per-entry,
+  an entry aging out of the window (more than 7 days since its own
+  `start_date`) takes any already-recorded spend against it with it —
+  unlike a raw running "used" total, this can never re-count as debt
+  against a User once the entries it drew from are gone (see ADR-0010's
+  rejected "simple aggregate" alternative).
 
   `today_net` is always >= 0 (today's entries fully fund a spend before
   overflowing elsewhere, so there's nothing left on them to go negative).
@@ -240,34 +247,29 @@ defmodule TimingPlayTime.PlayBalance do
          {:ok, pushscroll_balance} <- get_manual_sync_total(user),
          {:ok, usages} <- PlaytimeUsed.list_all(user.id),
          {:ok, used_today} <- PlaytimeUsed.total_used_today(user.id, user.timezone, now) do
-      opts = [from: window_start, to: now] ++ time_source_opts
+      # Unbounded (no :from) — the ledger needs full history to correctly
+      # replay consumption, since a usage still inside the window can have
+      # drawn on an entry now outside it (see the moduledoc above and
+      # EntryLedger's). Only the *display* windowing below (`week_entries`,
+      # `in_window`) is bounded to the Entry Expiry Window.
+      opts = [to: now] ++ time_source_opts
       raw_entries = fetch_entries(activities, opts, list_entries)
+      ledger_entries = build_ledger_entries(activities, raw_entries)
 
-      # Filtered again here, not just requested via `opts[:from]` above — an
-      # adapter that doesn't fully honor `:from` (or returns a superset)
-      # must not be able to hand the ledger anything outside the window;
-      # see the comment on `recent_usages` below for why that matters.
-      ledger_entries =
-        activities
-        |> build_ledger_entries(raw_entries)
-        |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
+      week_entries =
+        Enum.filter(ledger_entries, &(DateTime.compare(&1.start_date, window_start) != :lt))
 
       earned_today =
         sum_ledger_entries(ledger_entries, &(DateTime.compare(&1.start_date, today_from) != :lt))
 
-      # Usages older than the window are excluded, not just entries — a
-      # usage can only ever have consumed an entry that already existed
-      # (causality), so one more than 7 days old could never have touched
-      # anything still in-window anyway. Handing the ledger unbounded
-      # all-time history instead would let its oldest-first reserve
-      # draw-down drain ancient, already-invisible entries before ever
-      # reaching anything a User can see — new spending would then appear
-      # to do nothing until that backlog exhausts (see EntryLedger's
-      # moduledoc).
+      # Usages older than the window are excluded — a usage can only ever
+      # have consumed an entry that already existed (causality), so one
+      # more than 7 days old could never have touched anything still
+      # in-window anyway.
       recent_usages = Enum.filter(usages, &(DateTime.compare(&1.logged_at, window_start) != :lt))
 
       %{entries: replayed, receipts: receipts, deficit: deficit} =
-        EntryLedger.replay(ledger_entries, recent_usages, user.timezone)
+        EntryLedger.replay(ledger_entries, recent_usages, user.timezone, window_start)
 
       in_window = Enum.filter(replayed, &(DateTime.compare(&1.start_date, window_start) != :lt))
 
@@ -277,7 +279,7 @@ defmodule TimingPlayTime.PlayBalance do
       today_net = sum_remaining(today_entries)
       reserve = sum_remaining(reserve_entries) + pushscroll_balance - deficit
 
-      week_earned = Enum.reduce(ledger_entries, 0.0, &(&2 + &1.play_minutes))
+      week_earned = Enum.reduce(week_entries, 0.0, &(&2 + &1.play_minutes))
       week_used = Enum.reduce(recent_usages, 0.0, &(&2 + &1.minutes))
 
       {:ok,

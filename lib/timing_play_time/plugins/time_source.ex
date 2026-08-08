@@ -76,12 +76,16 @@ defmodule TimingPlayTime.Plugins.TimeSource do
   Unlike `get_elapsed_minutes/2`, `:from` is caller-supplied rather than
   adapter-owned and bounded by any Activity's Activated At — Activated At
   carries no functional weight on the user-facing path this feeds
-  (ADR-0010). Callers should pass the Entry Expiry Window's own start (`now
-  - 7 days`), not omit `:from` — the Entry Consumption Ledger's
-  reserve-overflow draw-down is oldest-`start_date`-first with no bound of
-  its own, so handed unbounded history it drains ancient, already-expired
-  entries before ever reaching anything a User can see (see
-  `TimingPlayTime.EntryLedger`'s moduledoc).
+  (ADR-0010). `PlayBalance.compute_today/4` omits `:from` (unbounded) when
+  fetching entries for the Entry Consumption Ledger's replay — the ledger
+  needs full history to correctly replay consumption, and instead protects
+  Reserve from an ancient backlog silently absorbing new spending via
+  `EntryLedger.replay/4`'s `window_start` argument, not via a bounded
+  fetch (see `TimingPlayTime.EntryLedger`'s moduledoc for why pre-filtering
+  entries by date doesn't work here). `week_activity_minutes/3` is the
+  other caller, and does pass `:from` — its per-Activity "This Week" figure
+  is a plain windowed sum with no ledger involved, so bounding the fetch is
+  the right (and cheaper) tool there.
 
   ## Parameters
     * `activities` - The Activity structs to fetch entries for

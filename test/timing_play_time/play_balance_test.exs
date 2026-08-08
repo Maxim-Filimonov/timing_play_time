@@ -583,11 +583,17 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.playtime == 20.0
     end
 
-    test "bounds the entries fetch to the Entry Expiry Window's start, not unbounded all-time",
+    test "fetches entries unbounded (no :from), not clipped to the Entry Expiry Window's start",
          %{user: user} do
       now = ~U[2026-07-25 10:00:00Z]
       test_pid = self()
 
+      # A bounded fetch would silently drop entries the ledger needs to
+      # correctly replay a still-in-window usage that drew on an
+      # already-expired entry (see the "an entry that expires after
+      # funding a still-recent usage" test below) — Reserve is protected
+      # from an ancient backlog instead via EntryLedger.replay/4's
+      # window_start-based draw-down priority, not by bounding this fetch.
       list_entries = fn _activities, opts ->
         send(test_pid, {:list_entries_opts, opts})
         {:ok, %{}}
@@ -604,7 +610,46 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert {:ok, _today} = PlayBalance.compute_today(user, now, [], list_entries)
 
       assert_received {:list_entries_opts, opts}
-      assert Keyword.get(opts, :from) == DateTime.add(now, -7, :day)
+      refute Keyword.has_key?(opts, :from)
+    end
+
+    test "an entry that expires after funding a still-recent usage doesn't re-draw from today's fresh entries",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      # 8 days ago: earned 100, and *at that time* a 100-min usage was logged
+      # that fully drained it (both existed together back then). The entry
+      # has since aged out (>7 days), but the usage that drained it hasn't
+      # (only 6 days old). Separately, today a fresh 50-min entry is earned,
+      # untouched by any spend.
+      list_entries = fn _activities, _opts ->
+        {:ok,
+         %{
+           "coding-proj-1" => [
+             %{start_date: DateTime.add(now, -8, :day), minutes: 100.0},
+             %{start_date: now, minutes: 50.0}
+           ]
+         }}
+      end
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 100.0, DateTime.add(now, -6, :day))
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      # Expected: the 8-day-old entry is gone (expired), but it already
+      # absorbed the 6-day-old usage back when both existed — so today's
+      # fresh 50 should be fully intact.
+      assert today.today_net == 50.0
+      assert today.reserve == 0.0
+      assert today.playtime == 50.0
     end
   end
 end
