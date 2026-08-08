@@ -208,16 +208,27 @@ defmodule TimingPlayTime.PlayBalance do
   entry's original (pre-consumption) `play_minutes`, and every recent
   usage's `minutes`, both summed with no ledger involved.
 
-  **`playtime == week_earned - week_used + pushscroll_balance`, exactly,
-  always** — the ledger's `:deficit` is *by construction* the part of
-  `week_used` that didn't come out of any entry's `remaining`
-  (`consumed_from_entries + deficit == week_used`), so it cancels out of
-  this identity algebraically even though it's very much present inside
+  `backlog_drawn` is the one figure here that *does* need the ledger: the
+  total minutes this week's usages drew from entries *outside* the window
+  (the overflow `EntryLedger.replay/4`'s `window_start` reaches into once
+  in-window entries run out — see above). Since that backlog isn't counted
+  in `week_earned`, spending against it wouldn't otherwise show up
+  anywhere in this week's math, silently breaking the identity below for
+  any User whose weekly spending outpaces weekly earning and dips into
+  older backlog — an expected, not edge-case, situation once Reserve is
+  allowed to carry a balance across weeks at all.
+
+  **`playtime == week_earned - week_used + backlog_drawn +
+  pushscroll_balance`, exactly, always** — the ledger's `:deficit` is *by
+  construction* the part of `week_used` that didn't come out of *any*
+  entry's `remaining`, in-window or not (`consumed_in_window +
+  backlog_drawn + deficit == week_used`), so it cancels out of this
+  identity algebraically even though it's very much present inside
   `today_net`/`reserve`'s own math. This is what makes `week_earned`/
-  `week_used` worth showing on their own next to `playtime` — unlike
-  `today_net + reserve`, this decomposition needs no explanation of
-  flooring, causality, or where deficit went to visibly check the
-  arithmetic.
+  `week_used`/`backlog_drawn` worth showing on their own next to
+  `playtime` — unlike `today_net + reserve`, this decomposition needs no
+  explanation of flooring, causality, or where deficit went to visibly
+  check the arithmetic.
 
   ## Examples
 
@@ -227,6 +238,7 @@ defmodule TimingPlayTime.PlayBalance do
         used_today: 10.0,
         week_earned: 120.0,
         week_used: 90.0,
+        backlog_drawn: 0.0,
         pushscroll_balance: 15.0,
         today_net: 17.5,
         reserve: 42.0,
@@ -271,7 +283,8 @@ defmodule TimingPlayTime.PlayBalance do
       %{entries: replayed, receipts: receipts, deficit: deficit} =
         EntryLedger.replay(ledger_entries, recent_usages, user.timezone, window_start)
 
-      in_window = Enum.filter(replayed, &(DateTime.compare(&1.start_date, window_start) != :lt))
+      {in_window, out_of_window} =
+        Enum.split_with(replayed, &(DateTime.compare(&1.start_date, window_start) != :lt))
 
       {today_entries, reserve_entries} =
         Enum.split_with(in_window, &(DateTime.compare(&1.start_date, today_from) != :lt))
@@ -281,6 +294,7 @@ defmodule TimingPlayTime.PlayBalance do
 
       week_earned = Enum.reduce(week_entries, 0.0, &(&2 + &1.play_minutes))
       week_used = Enum.reduce(recent_usages, 0.0, &(&2 + &1.minutes))
+      backlog_drawn = Enum.reduce(out_of_window, 0.0, &(&2 + (&1.play_minutes - &1.remaining)))
 
       {:ok,
        %{
@@ -288,6 +302,7 @@ defmodule TimingPlayTime.PlayBalance do
          used_today: used_today,
          week_earned: week_earned,
          week_used: week_used,
+         backlog_drawn: backlog_drawn,
          pushscroll_balance: pushscroll_balance,
          today_net: today_net,
          reserve: reserve,

@@ -346,7 +346,11 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # The 08:00 spend had nothing to draw on at all (no entry existed yet
       # that day, and no reserve) — it's pure deficit, absorbed by reserve.
       assert today.reserve == -45.0
-      assert_in_delta today.playtime, today.week_earned - today.week_used + today.pushscroll_balance, 0.0001
+
+      assert_in_delta today.playtime,
+                       today.week_earned - today.week_used + today.backlog_drawn +
+                         today.pushscroll_balance,
+                       0.0001
     end
 
     test "the identity holds when overflow drains reserve across several activities and days", %{
@@ -388,7 +392,53 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
 
-      assert_in_delta today.playtime, today.week_earned - today.week_used + today.pushscroll_balance, 0.0001
+      assert_in_delta today.playtime,
+                       today.week_earned - today.week_used + today.backlog_drawn +
+                         today.pushscroll_balance,
+                       0.0001
+    end
+
+    test "backlog_drawn covers spending that outpaces this week's own earning and dips into older backlog",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      # A large, older-than-the-window entry (still unspent) plus a small
+      # in-window one — this week's spend exceeds this week's own earning
+      # (20.0), so the overflow has to reach the older entry.
+      list_entries = fn _activities, _opts ->
+        {:ok,
+         %{
+           "coding-proj-1" => [
+             %{start_date: DateTime.add(now, -30, :day), minutes: 500.0},
+             %{start_date: DateTime.add(now, -3, :day), minutes: 20.0}
+           ]
+         }}
+      end
+
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 70.0, DateTime.add(now, -1, :day))
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], list_entries)
+
+      assert today.week_earned == 20.0
+      assert today.week_used == 70.0
+      # 20.0 came out of the in-window entry, the remaining 50.0 out of the
+      # 30-day-old backlog entry.
+      assert today.backlog_drawn == 50.0
+      assert today.reserve == 0.0
+      assert today.playtime == 0.0
+
+      assert_in_delta today.playtime,
+                       today.week_earned - today.week_used + today.backlog_drawn +
+                         today.pushscroll_balance,
+                       0.0001
     end
   end
 
@@ -650,6 +700,16 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.today_net == 50.0
       assert today.reserve == 0.0
       assert today.playtime == 50.0
+      # The 8-day-old entry is outside the window, so none of its 100
+      # counts toward week_earned — the 6-day-old usage that drained it
+      # counts fully toward week_used, so backlog_drawn has to cover the
+      # gap for the reconciliation identity to still hold.
+      assert today.backlog_drawn == 100.0
+
+      assert_in_delta today.playtime,
+                       today.week_earned - today.week_used + today.backlog_drawn +
+                         today.pushscroll_balance,
+                       0.0001
     end
   end
 end

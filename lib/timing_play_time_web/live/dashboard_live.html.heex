@@ -53,10 +53,13 @@
               />
             </div>
 
-            <%!-- Playtime == week_earned - week_used + pushscroll_balance, exactly,
-            always (see PlayBalance.compute_today/4's moduledoc) — shown so the
-            hero number is checkable at a glance, rather than requiring an
-            explanation of how Today's PT/Reserve are split. --%>
+            <%!-- Playtime == week_earned - week_used + backlog_drawn +
+            pushscroll_balance, exactly, always (see PlayBalance.compute_today/4's
+            moduledoc) — shown so the hero number is checkable at a glance,
+            rather than requiring an explanation of how Today's PT/Reserve are
+            split. backlog_drawn covers spending that outpaced this week's own
+            earning and dipped into older, already-off-the-books backlog
+            instead — without it, weeks like that wouldn't add up. --%>
             <p class="text-purple-200 text-sm mb-6">
               = <.time_display
                 minutes={@today.week_earned}
@@ -67,6 +70,10 @@
                 format={:short}
                 value_class="font-semibold text-white"
               /> used this week + <.time_display
+                minutes={@today.backlog_drawn}
+                format={:short}
+                value_class="font-semibold text-white"
+              /> drawn from backlog + <.time_display
                 minutes={@today.pushscroll_balance}
                 format={:short}
                 value_class="font-semibold text-white"
@@ -94,6 +101,10 @@
                 <div class="flex justify-between">
                   <span>Used</span>
                   <span class="font-bold text-red-300">{Float.round(@today.week_used, 1)}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>From Backlog</span>
+                  <span class="font-bold">{Float.round(@today.backlog_drawn, 1)}</span>
                 </div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">

@@ -326,6 +326,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     used_today: 0.0,
     week_earned: 0.0,
     week_used: 0.0,
+    backlog_drawn: 0.0,
     pushscroll_balance: 0.0,
     today_net: 0.0,
     reserve: 0.0,
@@ -469,12 +470,18 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
   # Same memoization as prefetched_get_elapsed_minutes/4, for the separate
   # `list_entries` call PlayBalance.compute_today/4 and
-  # week_activity_minutes/3 need (ADR-0010). Bounded to the Entry Expiry
-  # Window's own start — PlayBalance would filter an unbounded fetch back
-  # down to the same size, but fetching only what's needed in the first
-  # place avoids pulling a User's entire Timing history on every refresh.
+  # week_activity_minutes/3 need (ADR-0010). Unbounded (no :from) —
+  # compute_today/4's Entry Consumption Ledger needs full history to
+  # correctly replay consumption (a usage still inside the window can have
+  # drawn on an entry now outside it; see PlayBalance's and EntryLedger's
+  # moduledocs). This memoized function ignores whatever opts it's called
+  # with and always returns this one shared fetch, so bounding it here
+  # would silently override compute_today/4's own (correct) unbounded
+  # request — week_activity_minutes/3 still ends up window-correct despite
+  # the wider input, since it re-filters to the window itself after the
+  # fetch either way.
   defp prefetched_list_entries(activities, now, time_source_opts) do
-    opts = [from: PlayBalance.expiry_window_start(now), to: now] ++ time_source_opts
+    opts = [to: now] ++ time_source_opts
     result = @time_source.list_entries(activities, opts)
 
     fn _activities, _opts -> result end
