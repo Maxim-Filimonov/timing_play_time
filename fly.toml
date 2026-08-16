@@ -1,0 +1,38 @@
+# fly.toml app configuration file generated for timing-play-time on 2026-08-16T20:06:12+12:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'timing-play-time'
+primary_region = 'iad'
+kill_signal = 'SIGTERM'
+
+[build]
+[env]
+  DATABASE_PATH = '/data/timing_play_time.db'
+  PHX_HOST = 'timing-play-time.fly.dev'
+  PORT = '4000'
+
+[[mounts]]
+  source = 'timing_play_time_data'
+  destination = '/data'
+  auto_extend_size_threshold = 80
+  auto_extend_size_increment = '1GB'
+  auto_extend_size_limit = '10GB'
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 1000
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
