@@ -154,6 +154,7 @@ defmodule Mix.Tasks.Balance.Snapshot do
       This Week Earned:    #{fmt(today.week_earned)}
       This Week Used:      #{fmt(today.week_used)}
       Drawn from Backlog:  #{fmt(today.backlog_drawn)}
+      Backlog Remaining:   #{fmt(today.backlog_remaining)}
       Pushscroll Balance:  #{fmt(today.pushscroll_balance)}
       Today's PT:          #{fmt(today.today_net)}
       Reserve:             #{fmt(today.reserve)}

@@ -251,6 +251,7 @@ defmodule TimingPlayTime.PlayBalance do
         week_earned: 120.0,
         week_used: 90.0,
         backlog_drawn: 0.0,
+        backlog_remaining: 30.0,
         pushscroll_balance: 15.0,
         today_net: 17.5,
         reserve: 42.0,
@@ -301,6 +302,7 @@ defmodule TimingPlayTime.PlayBalance do
       week_earned = Enum.reduce(week_entries, 0.0, &(&2 + &1.play_minutes))
       week_used = Enum.reduce(recent_usages, 0.0, &(&2 + &1.minutes))
       backlog_drawn = Enum.reduce(out_of_window, 0.0, &(&2 + (&1.play_minutes - &1.remaining)))
+      backlog_remaining = sum_remaining(out_of_window)
 
       {:ok,
        %Today{
@@ -309,6 +311,7 @@ defmodule TimingPlayTime.PlayBalance do
          week_earned: week_earned,
          week_used: week_used,
          backlog_drawn: backlog_drawn,
+         backlog_remaining: backlog_remaining,
          pushscroll_balance: pushscroll_balance,
          today_net: today_net,
          reserve: reserve,

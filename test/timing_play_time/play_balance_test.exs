@@ -388,6 +388,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # 20.0 came out of the in-window entry, the remaining 50.0 out of the
       # 30-day-old backlog entry.
       assert today.backlog_drawn == 50.0
+      # The 30-day-old entry started with 500.0 and gave up 50.0 — 450.0
+      # is still sitting there, unspent, outside the window.
+      assert today.backlog_remaining == 450.0
       assert today.reserve == 0.0
       assert today.playtime == 0.0
 
@@ -395,6 +398,61 @@ defmodule TimingPlayTime.PlayBalanceTest do
                        today.week_earned - today.week_used + today.backlog_drawn +
                          today.pushscroll_balance,
                        0.0001
+    end
+  end
+
+  describe "compute_today/4's backlog_remaining" do
+    test "is zero when nothing exists outside the Entry Expiry Window", %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: DateTime.add(now, -3, :day), minutes: 20.0}]
+      }
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+
+      assert today.backlog_remaining == 0.0
+    end
+
+    test "sums unspent remaining minutes across every out-of-window entry, untouched by an unrelated spend",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 2.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      # Two old, out-of-window entries (still fully unspent) and one
+      # in-window entry. A spend fully covered by the in-window entry
+      # should leave both old entries — and therefore backlog_remaining —
+      # untouched.
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -30, :day), minutes: 40.0},
+          %{start_date: DateTime.add(now, -10, :day), minutes: 10.0},
+          %{start_date: DateTime.add(now, -3, :day), minutes: 5.0}
+        ]
+      }
+
+      {:ok, _} = PersistenceStub.log_playtime_used(user.id, 10.0, now)
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+
+      assert today.backlog_drawn == 0.0
+      # (40.0 + 10.0) * 2.0 multiplier, wholly unspent.
+      assert today.backlog_remaining == 100.0
     end
   end
 

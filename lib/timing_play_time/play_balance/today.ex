@@ -16,6 +16,15 @@ defmodule TimingPlayTime.PlayBalance.Today do
       entries *outside* the window, once in-window entries ran out. Not
       counted in `:week_earned`, so spending against it wouldn't
       otherwise show up anywhere in this week's math.
+    * `:backlog_remaining` - the flip side of `:backlog_drawn`: total
+      unspent `remaining` minutes still sitting on entries *outside* the
+      Entry Expiry Window, right now. This is what a large overflow spend
+      actually draws on before `:reserve` would ever go negative — a User
+      logging a spend well past what Reserve shows can be surprised when
+      Reserve holds steady, because it silently drew from here instead
+      (see `TimingPlayTime.PlayBalance.compute_today/4`'s moduledoc).
+      Unbounded and Timing-entries-only, same as `:backlog_drawn` — never
+      negative (each entry's `:remaining` floors at 0).
     * `:pushscroll_balance` - the current Manual Sync value.
     * `:today_net` - today's earned Play Minutes, net of the Entry
       Consumption Ledger's draw-down. Never negative.
@@ -46,6 +55,7 @@ defmodule TimingPlayTime.PlayBalance.Today do
     :week_earned,
     :week_used,
     :backlog_drawn,
+    :backlog_remaining,
     :pushscroll_balance,
     :today_net,
     :reserve,
@@ -60,6 +70,7 @@ defmodule TimingPlayTime.PlayBalance.Today do
           week_earned: float(),
           week_used: float(),
           backlog_drawn: float(),
+          backlog_remaining: float(),
           pushscroll_balance: float(),
           today_net: float(),
           reserve: float(),
