@@ -330,6 +330,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     week_earned: 0.0,
     week_used: 0.0,
     backlog_drawn: 0.0,
+    backlog_remaining: 0.0,
     pushscroll_balance: 0.0,
     today_net: 0.0,
     reserve: 0.0,
