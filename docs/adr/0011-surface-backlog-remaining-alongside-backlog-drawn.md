@@ -1,6 +1,6 @@
 # Surface Backlog Remaining alongside Backlog Drawn
 
-**Status**: accepted
+**Status**: superseded by [ADR-0012](0012-persisted-entry-consumption-ledger-with-window-bounded-spending.md)
 
 A User logged a large Playtime Used spend and expected Reserve to go negative, since it visibly exceeded This Week's Earned and the displayed Reserve figure. Instead Reserve held steady. This was correct — ADR-0010's `EntryLedger.replay/4` draws on the User's full, unbounded entry history as overflow before ever recording a `deficit` — but it was surprising, because nothing on the dashboard showed that a large, older-than-the-window balance existed to absorb the spend. `backlog_drawn` (ADR-0010's third amendment) shows what *has* been drawn from that backlog this week, but nothing showed what's still *there* to draw on.
 
