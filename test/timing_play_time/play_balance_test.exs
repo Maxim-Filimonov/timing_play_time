@@ -405,6 +405,77 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert {:ok, [logged]} = PersistenceStub.list_playtime_used(user.id)
       assert logged.id == usage.id
     end
+
+    test "normalizes a non-string time_entry_id, so the persisted row is storable and matches on later reads",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      # Timing's JSON `id` is not guaranteed to be a string, and an entry
+      # with no id at all falls back to its start_date — neither is storable
+      # in the ledger's :string column as-is (ADR-0012).
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -2, :day), minutes: 10.0, time_entry_id: 12_345},
+          %{start_date: DateTime.add(now, -1, :day), minutes: 10.0}
+        ]
+      }
+
+      assert {:ok, %{deficit: 0.0}} = PlayBalance.log_spend(user, 20.0, now, [], raw_entries)
+
+      assert {:ok, rows} = PersistenceStub.list_entry_consumption(user.id)
+      assert Enum.all?(rows, &is_binary(&1.time_entry_id))
+      assert Enum.find(rows, &(&1.time_entry_id == "12345")).consumed_minutes == 10.0
+
+      # And the read path keys the same way, so the consumption actually
+      # applies rather than the entries reading as still-unspent.
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+      assert today.reserve == 0.0
+    end
+
+    test "refuses the spend when the entries fetch fails, rather than booking it as permanent deficit",
+         %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      failing_fetch = fn _activities, _opts -> {:error, :timing_unavailable} end
+
+      assert {:error, :timing_unavailable} =
+               PlayBalance.log_spend(user, 30.0, now, [], nil, failing_fetch)
+
+      # A Timing outage must not durably record a spend against an empty
+      # pool: `deficit` is permanent (total_used - total_consumed), so
+      # unlike a failed read it would never self-correct (ADR-0012).
+      assert {:ok, []} = PersistenceStub.list_playtime_used(user.id)
+      assert {:ok, []} = PersistenceStub.list_entry_consumption(user.id)
+    end
+
+    test "returns {:error, :no_timezone} instead of crashing when the User has no timezone yet",
+         %{user: user} do
+      user = %{user | timezone: nil}
+      now = ~U[2026-07-25 10:00:00Z]
+
+      assert {:error, :no_timezone} = PlayBalance.log_spend(user, 15.0, now, [], %{})
+
+      # Nothing is written — the spend never happened, so the User can retry
+      # it once their timezone is set (ADR-0005 needs one for the day split).
+      assert {:ok, []} = PersistenceStub.list_playtime_used(user.id)
+      assert {:ok, []} = PersistenceStub.list_entry_consumption(user.id)
+    end
   end
 
   describe "compute_today/4's week_earned/week_used reconciliation" do

@@ -16,28 +16,44 @@ defmodule TimingPlayTime.EntryLedger do
   that already existed by the time it was logged (`start_date <=
   logged_at`) — consumption never reaches into entries not yet earned.
 
-  Computed live on every read — no persisted ledger state, consistent with
-  this app's "recomputed fresh" pattern.
+  Consumption is **persisted**, not recomputed live (ADR-0012) — the one
+  deliberate exception to this app's "recomputed fresh" pattern. A live
+  replay silently forgot consumption once the spend that caused it aged
+  past the Entry Expiry Window, so what each entry has given up is now
+  frozen at spend time in the Entry Consumption Ledger. An entry's *total
+  earned* is still derived live from its Activity's current Multiplier;
+  only the consumed portion is fixed.
 
-  **`replay/4` needs full, unwindowed `entries` history** — pre-filtering
-  entries to the Entry Expiry Window before replay was tried and reverted:
-  a usage still inside the window can have chronologically drawn on an
-  entry that's since aged out (the entry is always at least as old as the
-  usage that drew on it, so it can cross the window boundary first), and
-  excluding that entry from the pool made the replay re-litigate
-  already-settled consumption against whatever's currently visible
-  instead, corrupting Reserve. Only `usages` should be pre-filtered to the
-  window — a usage older than the window could never have touched an
-  entry still inside it (causality), so dropping it is always safe.
+  That splits this module in two:
 
-  **`load/4` is the one sanctioned way to fetch `entries` for `replay/4`**
-  (`PlayBalance.compute_today/4` and `week_activity_minutes/4` both use
-  it, directly or via their own default) — it fetches unbounded, with no
-  `:from` option exposed at all, so a caller can't accidentally re-narrow
-  the fetch the way three separate bug-fix commits each had to correct
-  (see this module's git history). Anything that needs entries for
-  ledger-adjacent figures should go through `load/4`, not call the
-  `TimeSource` adapter's `list_entries/2` directly.
+    * **Read path** — `with_remaining/2` (plus `index_consumption/1` and
+      `total_consumed/1`) annotates already-fetched entries from persisted
+      state. No replay, no usage history. `PlayBalance.compute_today/4`
+      uses only these.
+    * **Write path** — `replay/4` performs the FIFO draw-down once, at
+      spend time, for `PlayBalance.log_spend/6` (a single usage against a
+      window-bounded pool whose `:remaining` is pre-loaded from the
+      persisted ledger) and for the one-time `mix
+      balance.backfill_consumption` (full unwindowed history, replayed
+      under the old unbounded rule).
+
+  **`replay/4`'s `entries` and its `window_start` must agree.** Bounding
+  the pool to the window is correct only because each entry already
+  carries its persisted `:remaining` — the settled past isn't re-litigated
+  against whatever's currently visible, it's read back. Replaying *without*
+  pre-loaded `:remaining` (the backfill) still needs full, unwindowed
+  history for the reason ADR-0010 documented: an entry is always at least
+  as old as the usage that drew on it, so it can leave the window first,
+  and excluding it would re-spend minutes that are already gone.
+
+  **`load/4` and `fetch/4` are the sanctioned ways to fetch `entries`** —
+  nothing should call the `TimeSource` adapter's `list_entries/2` directly.
+  Both take the caller's `:from` (every current caller passes
+  `PlayBalance.expiry_window_start/1`, ADR-0012: nothing older than the
+  window is displayed or spendable any more, so there's no reason to pull
+  it). Use `fetch/4` on any path that *writes* — it propagates a fetch
+  failure instead of swallowing it to `%{}`, which a write path must never
+  mistake for "nothing earned".
 
   The optional `window_start` tells the reserve-overflow pass which
   entries are still Reserve-visible *right now*, so a fresh spend prefers
@@ -86,13 +102,16 @@ defmodule TimingPlayTime.EntryLedger do
 
   @doc """
   Fetches every given Activity's individual time entries via the
-  `TimeSource` plug-in contract (ADR-0002), for `replay/4`. Always
-  unbounded — no `:from` option exists here, deliberately (see this
-  module's moduledoc): this is the one place that decides how much
-  history to fetch for ledger-adjacent figures, so no caller can
-  accidentally re-narrow it. A fetch failure returns an empty map rather
-  than propagating the error (mirrors `PlayBalance.get_totals/3`'s same
-  swallow).
+  `TimeSource` plug-in contract (ADR-0002), for `build_entries/2`.
+
+  `time_source_opts` is passed straight through to the adapter alongside
+  `to: now` — callers bound the fetch to the Entry Expiry Window with
+  `from: PlayBalance.expiry_window_start(now)` (ADR-0012).
+
+  A fetch failure returns an empty map rather than propagating the error
+  (mirrors `PlayBalance.get_totals/3`'s same swallow), so this is for
+  **read paths only** — see `fetch/4` for the strict counterpart every
+  write path must use instead.
   """
   @spec load([map()], DateTime.t(), keyword(), (list(), keyword() -> {:ok, map()} | {:error, term()})) ::
           %{optional(String.t()) => [%{start_date: DateTime.t(), minutes: float()}]}
@@ -102,12 +121,62 @@ defmodule TimingPlayTime.EntryLedger do
         time_source_opts \\ [],
         list_entries \\ &@time_source.list_entries/2
       ) do
-    opts = [to: now] ++ time_source_opts
-
-    case list_entries.(activities, opts) do
+    case fetch(activities, now, time_source_opts, list_entries) do
       {:ok, entries} -> entries
       {:error, _reason} -> %{}
     end
+  end
+
+  @doc """
+  `load/4`'s strict counterpart: fetches the same entries but propagates a
+  fetch failure as `{:error, reason}` instead of swallowing it to `%{}`.
+
+  Write paths must use this. `PlayBalance.log_spend/5` settles consumption
+  durably at spend time (ADR-0012), so an empty pool it can't distinguish
+  from a genuine "nothing earned" would book the whole spend as permanent
+  `deficit` — and unlike a read, that never self-corrects once the outage
+  passes. Read paths can keep using `load/4`, where an empty fetch only
+  under-reports until the next successful read.
+  """
+  @spec fetch([map()], DateTime.t(), keyword(), (list(), keyword() -> {:ok, map()} | {:error, term()})) ::
+          {:ok, %{optional(String.t()) => [%{start_date: DateTime.t(), minutes: float()}]}}
+          | {:error, term()}
+  def fetch(
+        activities,
+        now \\ DateTime.utc_now(),
+        time_source_opts \\ [],
+        list_entries \\ &@time_source.list_entries/2
+      ) do
+    list_entries.(activities, [to: now] ++ time_source_opts)
+  end
+
+  @doc """
+  Turns a `load/4`/`fetch/4` result (raw entries keyed by
+  `time_source_identifier`) into `entry/0`s: each Activity's Multiplier
+  applied, and each entry tagged with the Activity it belongs to, for the
+  Entry Consumption Ledger and Spend Receipt.
+
+  `time_entry_id` falls back to `start_date` when a raw entry doesn't carry
+  one (e.g. a hand-built test fixture — the real Timing adapter and the Stub
+  both always supply one), and is always normalized to a string: the ledger
+  persists it in a `:string` column, and Timing's own JSON `id` isn't
+  guaranteed to be one. A non-string id both fails to persist and never
+  matches the persisted key on the read side (ADR-0012).
+  """
+  @spec build_entries([map()], %{optional(String.t()) => [map()]}) :: [entry()]
+  def build_entries(activities, raw_entries_by_identifier) do
+    Enum.flat_map(activities, fn activity ->
+      raw_entries_by_identifier
+      |> Map.get(activity.time_source_identifier, [])
+      |> Enum.map(fn raw_entry ->
+        %{
+          activity_id: activity.id,
+          time_entry_id: to_string(Map.get(raw_entry, :time_entry_id) || raw_entry.start_date),
+          start_date: raw_entry.start_date,
+          play_minutes: raw_entry.minutes * activity.multiplier
+        }
+      end)
+    end)
   end
 
   @doc """

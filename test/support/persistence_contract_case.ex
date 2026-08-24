@@ -353,6 +353,20 @@ defmodule TimingPlayTime.PersistenceContractCase do
           assert Enum.find(rows, &(&1.time_entry_id == "entry-2")).consumed_minutes == 5.0
         end
 
+        test "keeps the same {activity_id, time_entry_id} independent across two users", %{
+          user_id: user_id,
+          other_user_id: other_user_id
+        } do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 10.0)
+          {:ok, _} = @persistence.record_entry_consumption(other_user_id, "activity-1", "entry-1", 999.0)
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.consumed_minutes == 10.0
+
+          assert {:ok, [other_row]} = @persistence.list_entry_consumption(other_user_id)
+          assert other_row.consumed_minutes == 999.0
+        end
+
         test "entry consumption is isolated per user", %{
           user_id: user_id,
           other_user_id: other_user_id
@@ -360,6 +374,52 @@ defmodule TimingPlayTime.PersistenceContractCase do
           {:ok, _} = @persistence.record_entry_consumption(other_user_id, "activity-1", "entry-1", 999.0)
 
           assert {:ok, []} = @persistence.list_entry_consumption(user_id)
+        end
+      end
+
+      describe "record_entry_consumptions/2 (the backfill's atomic batch write)" do
+        test "records every given row in one call", %{user_id: user_id} do
+          consumptions = [
+            %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 12.0},
+            %{activity_id: "activity-2", time_entry_id: "entry-2", minutes: 3.0}
+          ]
+
+          assert {:ok, 2} = @persistence.record_entry_consumptions(user_id, consumptions)
+
+          assert {:ok, rows} = @persistence.list_entry_consumption(user_id)
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-1")).consumed_minutes == 12.0
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-2")).consumed_minutes == 3.0
+        end
+
+        test "adds to, rather than overwrites, existing consumption on an entry", %{user_id: user_id} do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 5.0)
+
+          assert {:ok, 1} =
+                   @persistence.record_entry_consumptions(user_id, [
+                     %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 7.0}
+                   ])
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.consumed_minutes == 12.0
+        end
+
+        test "writes nothing at all when any row in the batch is invalid", %{user_id: user_id} do
+          consumptions = [
+            %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 12.0},
+            %{activity_id: nil, time_entry_id: "entry-2", minutes: 3.0}
+          ]
+
+          assert {:error, _reason} =
+                   @persistence.record_entry_consumptions(user_id, consumptions)
+
+          # All-or-nothing: a half-seeded ledger would report a permanently
+          # wrong deficit, and the backfill refuses to re-run over existing
+          # rows (ADR-0012).
+          assert {:ok, []} = @persistence.list_entry_consumption(user_id)
+        end
+
+        test "accepts an empty batch", %{user_id: user_id} do
+          assert {:ok, 0} = @persistence.record_entry_consumptions(user_id, [])
         end
       end
 

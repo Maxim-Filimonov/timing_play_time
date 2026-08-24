@@ -20,6 +20,6 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite.EntryConsumption do
     entry_consumption
     |> cast(attrs, @fields)
     |> validate_required(@fields)
-    |> unique_constraint([:activity_id, :time_entry_id])
+    |> unique_constraint([:user_id, :activity_id, :time_entry_id])
   end
 end

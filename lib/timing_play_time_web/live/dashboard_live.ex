@@ -83,14 +83,16 @@ defmodule TimingPlayTimeWeb.DashboardLive do
         now = DateTime.utc_now()
         time_source_opts = client_opts(socket)
 
-        # One shared Timing fetch, reused both for log_spend/4's draw-down
+        # One shared Timing fetch, reused both for log_spend/6's draw-down
         # and for the post-spend refresh below — Timing's own entries are
         # unaffected by this app's spend, only our own persisted
-        # consumption is, so there's nothing stale about reusing it.
-        {_activities, totals, raw_entries} = fetch_activities_and_balance_fetchers(socket)
+        # consumption is, so there's nothing stale about reusing it. Strict
+        # (`fetch_activities_and_entries/1`): a fetch failure must abort the
+        # spend, not silently settle it against an empty pool.
+        {_activities, totals, entries_result} = fetch_activities_and_entries(socket)
 
-        case PlayBalance.log_spend(user, minutes, now, time_source_opts, raw_entries) do
-          {:ok, %{receipt: receipt}} ->
+        case spend(entries_result, user, minutes, now, time_source_opts) do
+          {:ok, raw_entries, %{receipt: receipt}} ->
             broadcast_balance_updated(user)
 
             socket = load_balance(socket, totals, raw_entries)
@@ -103,6 +105,14 @@ defmodule TimingPlayTimeWeb.DashboardLive do
               )
 
             {:noreply, socket}
+
+          {:error, :no_timezone} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Set your timezone in Settings to log playtime."
+             )}
 
           {:error, _reason} ->
             {:noreply, put_flash(socket, :error, "Couldn't log playtime")}
@@ -299,7 +309,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # sharing a fetch, that's a separate call per caller. `totals`
   # (`PlayBalance.get_totals/3`) is every given Activity's cumulative and
   # today-scoped totals in one shot (ADR-0008); `raw_entries`
-  # (`EntryLedger.load/4`) is a second, separate fetch of individual dated
+  # (`EntryLedger.fetch/4`) is a second, separate fetch of individual dated
   # entries for the Entry Consumption Ledger (ADR-0010) — kept apart from
   # `totals` so the debug-only Play Balance reveal keeps fetching exactly
   # as before. `fetch_activities_and_balance_fetchers/1` makes each real
@@ -363,7 +373,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # The Spend Receipt for the usage `log_playtime` just logged, formatted as
   # a flash-message suffix — always appended (ADR-0010: "always shown, even
   # for single-Activity spends", so the UI element is predictable rather
-  # than intermittent). Returned directly by `PlayBalance.log_spend/4`
+  # than intermittent). Returned directly by `PlayBalance.log_spend/6`
   # (ADR-0012) rather than looked up afterward, since reads no longer
   # replay usage history. Empty when nothing was matched (a fully unmatched
   # spend, the ledger's `:deficit`).
@@ -435,14 +445,30 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
   # Every caller in this pipeline ends up needing both `totals`
   # (`PlayBalance.get_totals/3` — the debug Play Balance, and each
-  # Activity's "Today" figure) and `raw_entries` (`EntryLedger.load/4` —
+  # Activity's "Today" figure) and `raw_entries` (`EntryLedger.fetch/4` —
   # Reserve/Playtime, and each Activity's "This Week" figure — ADR-0010),
   # so there's just the one combined fetch rather than a `totals`-only
   # variant some callers use and others don't. Each is fetched exactly
-  # once here and passed down as a plain value — no caller re-fetches, and
-  # none can accidentally narrow the window either (EntryLedger.load/4's
-  # moduledoc).
+  # once here and passed down as a plain value, so no caller re-fetches —
+  # and the window bound is applied in exactly one place, below.
   defp fetch_activities_and_balance_fetchers(socket) do
+    {activities, totals, entries_result} = fetch_activities_and_entries(socket)
+
+    entries =
+      case entries_result do
+        {:ok, entries} -> entries
+        {:error, _reason} -> %{}
+      end
+
+    {activities, totals, entries}
+  end
+
+  # The strict counterpart, for the one caller that writes rather than
+  # displays: `log_playtime` must not settle a spend against entries a
+  # failed fetch turned into an empty map, since the resulting `deficit` is
+  # permanent (ADR-0012). Display paths above swallow it, where an empty
+  # fetch only under-reports until the next successful read.
+  defp fetch_activities_and_entries(socket) do
     user = socket.assigns.current_user
     time_source_opts = client_opts(socket)
     now = DateTime.utc_now()
@@ -461,9 +487,19 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     # cumulative figures, ADR-0008), nothing older than the window is ever
     # displayed or spendable any more, so there's no reason to fetch it.
     window_start = PlayBalance.expiry_window_start(now)
-    raw_entries = EntryLedger.load(activities, now, [from: window_start] ++ time_source_opts)
+    entries_result = EntryLedger.fetch(activities, now, [from: window_start] ++ time_source_opts)
 
-    {activities, totals, raw_entries}
+    {activities, totals, entries_result}
+  end
+
+  # Carries the successfully-fetched entries back out alongside the spend's
+  # own result, so the post-spend refresh reuses the same fetch.
+  defp spend({:error, reason}, _user, _minutes, _now, _time_source_opts), do: {:error, reason}
+
+  defp spend({:ok, raw_entries}, user, minutes, now, time_source_opts) do
+    with {:ok, result} <- PlayBalance.log_spend(user, minutes, now, time_source_opts, raw_entries) do
+      {:ok, raw_entries, result}
+    end
   end
 
   defp today_from(%{timezone: nil}, _now), do: nil

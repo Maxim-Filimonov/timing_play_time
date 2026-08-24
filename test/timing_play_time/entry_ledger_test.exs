@@ -152,6 +152,82 @@ defmodule TimingPlayTime.EntryLedgerTest do
     end
   end
 
+  describe "build_entries/2" do
+    test "applies each Activity's multiplier and tags entries with the Activity" do
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 2.0}]
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: "e1"}
+        ]
+      }
+
+      assert [entry] = EntryLedger.build_entries(activities, raw_entries)
+      assert entry.activity_id == "a1"
+      assert entry.time_entry_id == "e1"
+      assert entry.play_minutes == 20.0
+      assert entry.start_date == ~U[2026-07-25 01:00:00Z]
+    end
+
+    test "normalizes every time_entry_id to a string, including the start_date fallback" do
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0}]
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: 12_345},
+          %{start_date: ~U[2026-07-26 01:00:00Z], minutes: 10.0}
+        ]
+      }
+
+      assert [with_id, without_id] = EntryLedger.build_entries(activities, raw_entries)
+      assert with_id.time_entry_id == "12345"
+      assert is_binary(without_id.time_entry_id)
+    end
+
+    test "skips an Activity with no entries in the fetch" do
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0}]
+
+      assert EntryLedger.build_entries(activities, %{}) == []
+    end
+  end
+
+  describe "fetch/4" do
+    test "returns the entries tagged, on success" do
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      entries = %{"coding-proj-1" => []}
+      list_entries = fn _activities, _opts -> {:ok, entries} end
+
+      assert {:ok, ^entries} =
+               EntryLedger.fetch(activities, ~U[2026-07-25 10:00:00Z], [], list_entries)
+    end
+
+    test "propagates a fetch error rather than swallowing it to an empty map" do
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      list_entries = fn _activities, _opts -> {:error, :boom} end
+
+      assert {:error, :boom} =
+               EntryLedger.fetch(activities, ~U[2026-07-25 10:00:00Z], [], list_entries)
+    end
+
+    test "passes the caller's opts through, alongside :to" do
+      test_pid = self()
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      now = ~U[2026-07-25 10:00:00Z]
+      window_start = ~U[2026-07-18 10:00:00Z]
+
+      list_entries = fn _activities, opts ->
+        send(test_pid, {:list_entries_opts, opts})
+        {:ok, %{}}
+      end
+
+      EntryLedger.fetch(activities, now, [from: window_start], list_entries)
+
+      assert_received {:list_entries_opts, opts}
+      assert Keyword.get(opts, :to) == now
+      assert Keyword.get(opts, :from) == window_start
+    end
+  end
+
   describe "replay/3 deficit" do
     test "is zero when every usage is fully covered" do
       entries = [%{activity_id: "coding", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}]

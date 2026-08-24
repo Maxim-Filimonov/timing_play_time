@@ -27,8 +27,9 @@ defmodule TimingPlayTime.PlayBalance do
   `now - 7 days`, not aligned to local calendar days. Exposed for display
   (e.g. `Mix.Tasks.Balance.Snapshot` prints it) — `compute_today/4` and
   `week_activity_minutes/4` both use it internally to filter their
-  already-loaded entries down to the window, not to bound the fetch itself
-  (see `EntryLedger.load/4`'s moduledoc for why the fetch stays unbounded).
+  already-loaded entries down to the window, and as of ADR-0012 it also
+  bounds the fetch itself (`from:`), since nothing older than the window is
+  displayed or spendable any more.
 
   ## Examples
 
@@ -138,11 +139,12 @@ defmodule TimingPlayTime.PlayBalance do
   nets the User's total.
 
   `raw_entries` — when given (e.g. by `DashboardLive`, sharing one fetch
-  across every Activity and `compute_today/4`) — is `EntryLedger.load/4`'s
-  return shape, keyed by `time_source_identifier`. When omitted, this
-  fetches it itself via `EntryLedger.load/4`, unbounded (see that
-  function's moduledoc for why) — filtering down to the window happens
-  here either way, so the wider input doesn't change the result.
+  across every Activity and `compute_today/4`, already bounded to the
+  window) — is `EntryLedger.load/4`'s return shape, keyed by
+  `time_source_identifier`. When omitted, this fetches it itself via
+  `EntryLedger.load/4` with no `from:` of its own — filtering down to the
+  window happens here either way, so the wider input doesn't change the
+  result, only how much is fetched.
 
   ## Examples
 
@@ -178,7 +180,7 @@ defmodule TimingPlayTime.PlayBalance do
   (`EntryLedger.with_remaining/2`, joining live-fetched entries against
   `@persistence.list_entry_consumption/1`) rather than replaying usage
   history live. All the drawing-down happens once, at write time, in
-  `log_spend/4` — this function never mutates anything.
+  `log_spend/6` — this function never mutates anything.
 
   `reserve`'s `deficit` term is derived, not replayed: the all-time gap
   between everything ever logged (`PlaytimeUsed.total_used/1`) and
@@ -189,7 +191,7 @@ defmodule TimingPlayTime.PlayBalance do
   `remaining`, never rewrites what was already recorded as consumed.
 
   `today_net` is always >= 0 (a spend draws today's own entries before
-  ever overflowing into reserve, at write time — see `log_spend/4`).
+  ever overflowing into reserve, at write time — see `log_spend/6`).
   `reserve` absorbs every overflow instead, including `deficit`, which is
   the only way it goes negative other than a negative Pushscroll Balance.
   `playtime` (`today_net + reserve`) is unaffected by exactly how the
@@ -253,7 +255,7 @@ defmodule TimingPlayTime.PlayBalance do
 
       week_entries =
         activities
-        |> build_ledger_entries(raw_entries)
+        |> EntryLedger.build_entries(raw_entries)
         |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
         |> EntryLedger.with_remaining(EntryLedger.index_consumption(consumption))
 
@@ -305,30 +307,47 @@ defmodule TimingPlayTime.PlayBalance do
   window — expiry only removes what's still `remaining`.
 
   `raw_entries`, when given, must already be bounded to the window (same
-  shape as `compute_today/4`'s) — when omitted, this fetches it itself.
+  shape as `compute_today/4`'s) — when omitted, this fetches it itself via
+  `EntryLedger.fetch/4`, the strict variant: a spend must never be settled
+  against entries a failed fetch turned into an empty pool, since the
+  resulting `deficit` is permanent and (unlike a read) never self-corrects.
 
   ## Returns
     * `{:ok, %{usage: usage, receipt: receipt, deficit: deficit}}`
+    * `{:error, :no_timezone}` - if the User has no timezone yet; the
+      day-scoped first pass has no boundary to work from (ADR-0005), so
+      nothing is written and the spend can be retried once one is set
     * `{:error, reason}` - if activities, existing consumption, or the
-      usage record itself can't be read or written
+      entries fetch fail, or the write itself does; nothing is left
+      partially applied either way
   """
   def log_spend(
         user,
         minutes,
         now \\ DateTime.utc_now(),
         time_source_opts \\ [],
-        raw_entries \\ nil
-      ) do
+        raw_entries \\ nil,
+        list_entries \\ &@time_source.list_entries/2
+      )
+
+  # The two-pass draw-down needs a local day boundary (ADR-0005), and a User
+  # whose timezone hasn't been detected yet has none. Refuse the spend rather
+  # than crashing or guessing a boundary — nothing is written, so the User can
+  # retry once they've set a timezone in Settings.
+  def log_spend(%{timezone: nil}, _minutes, _now, _time_source_opts, _raw_entries, _list_entries) do
+    {:error, :no_timezone}
+  end
+
+  def log_spend(user, minutes, now, time_source_opts, raw_entries, list_entries) do
     window_start = expiry_window_start(now)
 
     with {:ok, activities} <- @persistence.list_activities(user.id),
-         {:ok, consumption} <- @persistence.list_entry_consumption(user.id) do
-      raw_entries =
-        raw_entries || EntryLedger.load(activities, now, [from: window_start] ++ time_source_opts)
-
+         {:ok, consumption} <- @persistence.list_entry_consumption(user.id),
+         {:ok, raw_entries} <-
+           fetch_spend_entries(raw_entries, activities, now, window_start, time_source_opts, list_entries) do
       pool =
         activities
-        |> build_ledger_entries(raw_entries)
+        |> EntryLedger.build_entries(raw_entries)
         |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
         |> EntryLedger.with_remaining(EntryLedger.index_consumption(consumption))
 
@@ -382,25 +401,18 @@ defmodule TimingPlayTime.PlayBalance do
     @persistence.total_playtime_used(user.id)
   end
 
-  # Applies each Activity's Multiplier to its raw Timing entries, tagging
-  # each with the Activity it belongs to for the Entry Consumption Ledger
-  # and Spend Receipt. `time_entry_id` defaults to `start_date` when a raw
-  # entry doesn't carry one (e.g. a hand-built test fixture) — the real
-  # Timing adapter and the Stub TimeSource adapter both always supply one
-  # (ADR-0012).
-  defp build_ledger_entries(activities, raw_entries_by_identifier) do
-    Enum.flat_map(activities, fn activity ->
-      raw_entries_by_identifier
-      |> Map.get(activity.time_source_identifier, [])
-      |> Enum.map(fn raw_entry ->
-        %{
-          activity_id: activity.id,
-          time_entry_id: Map.get(raw_entry, :time_entry_id) || raw_entry.start_date,
-          start_date: raw_entry.start_date,
-          play_minutes: raw_entry.minutes * activity.multiplier
-        }
-      end)
-    end)
+  # A spend is a durable write (ADR-0012), so its entries fetch must be the
+  # strict `EntryLedger.fetch/4`, not the swallowing `load/4`: an outage that
+  # read as an empty pool would book the whole spend as `deficit`, and
+  # `deficit` (total_used - total_consumed) never self-corrects the way a
+  # failed read does. An already-fetched `raw_entries` is taken as-is — its
+  # own caller already handled the failure.
+  defp fetch_spend_entries(nil, activities, now, window_start, time_source_opts, list_entries) do
+    EntryLedger.fetch(activities, now, [from: window_start] ++ time_source_opts, list_entries)
+  end
+
+  defp fetch_spend_entries(raw_entries, _activities, _now, _window_start, _opts, _list_entries) do
+    {:ok, raw_entries}
   end
 
   defp sum_play_minutes(entries) do

@@ -9,6 +9,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
   alias TimingPlayTime.Accounts
   alias TimingPlayTime.Plugins.Persistence.Stub, as: PersistenceStub
+  alias TimingPlayTime.Plugins.TimeSource.Stub, as: TimeSourceStub
 
   setup %{conn: conn} do
     :ok = PersistenceStub.clear_all_state()
@@ -41,6 +42,53 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     {:ok, _view, html} = live(conn, ~p"/")
 
     assert html =~ "Coding"
+  end
+
+  test "refuses to log playtime while the time source is unreachable, rather than recording a permanent deficit",
+       %{conn: conn, user: user} do
+    {:ok, _activity} =
+      PersistenceStub.create_activity(user.id, %{
+        name: "Coding",
+        time_source_identifier: "coding-proj-1",
+        multiplier: 1.0,
+        activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    TimeSourceStub.fail_list_entries({:error, :timing_unavailable})
+    on_exit(fn -> TimeSourceStub.fail_list_entries(nil) end)
+
+    html =
+      view
+      |> form("form[phx-submit=log_playtime]", %{"minutes" => "5.0"})
+      |> render_submit()
+
+    assert html =~ "Couldn&#39;t log playtime"
+    assert {:ok, []} = PersistenceStub.list_playtime_used(user.id)
+    assert {:ok, []} = PersistenceStub.list_entry_consumption(user.id)
+  end
+
+  test "disables the Log Playtime button while the spend is in flight, so a double-submit can't draw the same entries twice",
+       %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    assert html =~ ~s(phx-disable-with="Logging...")
+  end
+
+  test "points a User with no timezone at Settings instead of crashing when they log playtime" do
+    {:ok, user} = Accounts.create_user()
+    conn = Phoenix.ConnTest.build_conn() |> log_in_user(user)
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    html =
+      view
+      |> form("form[phx-submit=log_playtime]", %{"minutes" => "5.0"})
+      |> render_submit()
+
+    assert html =~ "Set your timezone in Settings to log playtime"
+    assert {:ok, []} = PersistenceStub.list_playtime_used(user.id)
   end
 
   test "shows today's minutes and Play Minutes per Activity, and labels Manual Sync as Pushscroll Balance",

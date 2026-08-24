@@ -86,6 +86,22 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
     GenServer.call(__MODULE__, {:list_entry_consumption, user_id})
   end
 
+  @doc """
+  Test-only: forces every subsequent `list_activities/1` call to return
+  `result` (e.g. `{:error, :boom}`) until reset with `nil`. Nothing in this
+  in-memory stub can fail on its own, so this is the only way to exercise a
+  caller's persistence-failure path.
+  """
+  def fail_list_activities(result) do
+    Application.put_env(:timing_play_time, :stub_list_activities_result, result)
+    :ok
+  end
+
+  @impl true
+  def record_entry_consumptions(user_id, consumptions) do
+    GenServer.call(__MODULE__, {:record_entry_consumptions, user_id, consumptions})
+  end
+
   @impl true
   def record_spend(user_id, consumptions, minutes, logged_at) do
     GenServer.call(__MODULE__, {:record_spend, user_id, consumptions, minutes, logged_at})
@@ -105,13 +121,10 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
 
   @impl true
   def handle_call({:list_activities, user_id}, _from, state) do
-    activities =
-      @activities_table
-      |> :ets.tab2list()
-      |> Enum.map(fn {_id, activity} -> activity end)
-      |> Enum.filter(&(&1.user_id == user_id))
-
-    {:reply, {:ok, activities}, state}
+    case Application.get_env(:timing_play_time, :stub_list_activities_result) do
+      nil -> {:reply, list_activities_for(user_id), state}
+      result -> {:reply, result, state}
+    end
   end
 
   @impl true
@@ -224,6 +237,25 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
     {:reply, {:ok, total}, state}
   end
 
+  # Validated up front, then written — the Sqlite adapter gets
+  # all-or-nothing from Repo.transaction, and this mirrors it rather than
+  # writing rows until one turns out to be malformed (ADR-0012).
+  @impl true
+  def handle_call({:record_entry_consumptions, user_id, consumptions}, _from, state) do
+    reply =
+      if Enum.all?(consumptions, &valid_consumption?/1) do
+        Enum.each(consumptions, fn %{activity_id: activity_id, time_entry_id: time_entry_id, minutes: delta} ->
+          increment_consumption(user_id, activity_id, time_entry_id, delta)
+        end)
+
+        {:ok, length(consumptions)}
+      else
+        {:error, :invalid_consumption}
+      end
+
+    {:reply, reply, state}
+  end
+
   # GenServer.call is already fully serialized (single process, one message
   # at a time), so handling both writes inside a single handler makes them
   # atomic for free — no other caller can observe a state where one has
@@ -263,9 +295,25 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
     {:reply, :ok, state}
   end
 
+  defp list_activities_for(user_id) do
+    activities =
+      @activities_table
+      |> :ets.tab2list()
+      |> Enum.map(fn {_id, activity} -> activity end)
+      |> Enum.filter(&(&1.user_id == user_id))
+
+    {:ok, activities}
+  end
+
   defp generate_id do
     :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
   end
+
+  defp valid_consumption?(%{activity_id: activity_id, time_entry_id: time_entry_id, minutes: minutes}) do
+    activity_id != nil and time_entry_id != nil and is_number(minutes)
+  end
+
+  defp valid_consumption?(_other), do: false
 
   defp increment_consumption(user_id, activity_id, time_entry_id, minutes) do
     key = {user_id, activity_id, time_entry_id}

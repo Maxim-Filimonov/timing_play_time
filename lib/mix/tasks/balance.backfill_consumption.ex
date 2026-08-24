@@ -5,7 +5,8 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
   Replays a User's full, unwindowed entry and usage history under the OLD
   unbounded-overflow rule (pure oldest-first FIFO, no window prioritization
   — `EntryLedger.replay/4` with `window_start: nil`) and persists the
-  resulting per-entry consumption via `record_entry_consumption/4`.
+  resulting per-entry consumption via `record_entry_consumptions/2`, as one
+  atomic batch.
 
   This is the one-time migration ADR-0012 calls for: without it, a User's
   existing entries all read as fully unspent under the new persisted
@@ -14,7 +15,7 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
   live-replay bug's inflated figures once, rather than starting the new
   design from a wrong baseline.
 
-  **Not idempotent** — `record_entry_consumption/4` always adds to
+  **Not idempotent** — a consumption write always adds to
   whatever's already there, so running this twice for the same User would
   double-count. Refuses to run against a User who already has any
   consumption rows, unless `--dry-run` is given.
@@ -64,52 +65,52 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
       end
 
       raw_entries = EntryLedger.load(activities, DateTime.utc_now(), time_source_opts)
-      ledger_entries = build_ledger_entries(activities, raw_entries)
+      ledger_entries = EntryLedger.build_entries(activities, raw_entries)
 
       %{entries: replayed} = EntryLedger.replay(ledger_entries, usages, user.timezone)
 
       to_backfill =
         replayed
-        |> Enum.map(&{&1.activity_id, &1.time_entry_id, &1.play_minutes - &1.remaining})
-        |> Enum.filter(fn {_activity_id, _time_entry_id, consumed} -> consumed > 0.0 end)
+        |> Enum.map(
+          &%{
+            activity_id: &1.activity_id,
+            time_entry_id: &1.time_entry_id,
+            minutes: &1.play_minutes - &1.remaining
+          }
+        )
+        |> Enum.filter(&(&1.minutes > 0.0))
 
       Mix.shell().info(
         "#{length(to_backfill)} of #{length(replayed)} entries have consumption to backfill."
       )
 
       if dry_run? do
-        Enum.each(to_backfill, fn {activity_id, time_entry_id, minutes} ->
+        Enum.each(to_backfill, fn row ->
           Mix.shell().info(
-            "  (dry run) activity=#{activity_id} entry=#{inspect(time_entry_id)}: #{Float.round(minutes, 1)}"
+            "  (dry run) activity=#{row.activity_id} entry=#{inspect(row.time_entry_id)}: " <>
+              "#{Float.round(row.minutes, 1)}"
           )
         end)
       else
-        Enum.each(to_backfill, fn {activity_id, time_entry_id, minutes} ->
-          {:ok, _total} = @persistence.record_entry_consumption(user.id, activity_id, time_entry_id, minutes)
-        end)
+        # One atomic batch, not a write per entry: this task refuses to run
+        # against a User who already has rows, so a partial write could
+        # neither be completed nor safely re-run — and a half-seeded ledger
+        # reports a permanently wrong deficit (ADR-0012).
+        case @persistence.record_entry_consumptions(user.id, to_backfill) do
+          {:ok, count} ->
+            Mix.shell().info("Backfilled #{count} entries for User #{user.id}.")
 
-        Mix.shell().info("Backfilled #{length(to_backfill)} entries for User #{user.id}.")
+          {:error, reason} ->
+            Mix.raise("backfill failed, nothing was written: #{inspect(reason)}")
+        end
       end
+    else
+      # Without this, an {:error, _} from any lookup above would fall
+      # straight out of run/1 with nothing printed — an operator would see a
+      # clean exit and reasonably conclude the ledger had been seeded.
+      {:error, reason} ->
+        Mix.raise("could not read this User's history: #{inspect(reason)}")
     end
-  end
-
-  # Mirrors PlayBalance's own private build_ledger_entries/2 — duplicated
-  # rather than exposed publicly from PlayBalance, since this task needs
-  # full unwindowed history (backfill's whole point) where PlayBalance's
-  # callers always want the window-bounded kind.
-  defp build_ledger_entries(activities, raw_entries_by_identifier) do
-    Enum.flat_map(activities, fn activity ->
-      raw_entries_by_identifier
-      |> Map.get(activity.time_source_identifier, [])
-      |> Enum.map(fn raw_entry ->
-        %{
-          activity_id: activity.id,
-          time_entry_id: Map.get(raw_entry, :time_entry_id) || raw_entry.start_date,
-          start_date: raw_entry.start_date,
-          play_minutes: raw_entry.minutes * activity.multiplier
-        }
-      end)
-    end)
   end
 
   defp fetch_user!(opts) do

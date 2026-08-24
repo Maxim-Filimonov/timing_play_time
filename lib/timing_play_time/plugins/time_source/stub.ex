@@ -45,10 +45,30 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
     daily_rate(activity) * days_active
   end
 
+  @doc """
+  Test-only: forces every subsequent `list_entries/2` call to return
+  `result` (e.g. `{:error, :timing_unavailable}`) until reset with `nil`.
+  The simulation below can't fail on its own, so this is the only way to
+  exercise a caller's time-source-outage path — notably
+  `PlayBalance.log_spend/6`, which must refuse a spend rather than settle
+  it against an empty pool (ADR-0012).
+  """
+  def fail_list_entries(result) do
+    Application.put_env(:timing_play_time, :stub_list_entries_result, result)
+    :ok
+  end
+
   @impl true
   def list_entries(activities, opts \\ [])
 
   def list_entries(activities, opts) do
+    case Application.get_env(:timing_play_time, :stub_list_entries_result) do
+      nil -> simulate_list_entries(activities, opts)
+      result -> result
+    end
+  end
+
+  defp simulate_list_entries(activities, opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to, DateTime.utc_now())
 

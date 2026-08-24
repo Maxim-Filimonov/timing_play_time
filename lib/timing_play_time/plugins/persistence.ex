@@ -149,6 +149,24 @@ defmodule TimingPlayTime.Plugins.Persistence do
   @callback list_entry_consumption(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
 
   @doc """
+  Atomically records a batch of consumption deltas with no usage record
+  attached — the one-time backfill's write path (`mix
+  balance.backfill_consumption`, ADR-0012), where the usages already exist
+  and only the ledger needs seeding.
+
+  All-or-nothing, for the same reason `record_spend/4` is: a half-seeded
+  ledger reports a permanently wrong `deficit` (`total_used -
+  total_consumed`), and the backfill refuses to re-run against a User who
+  already has rows, so a partial write can't be completed or safely redone.
+
+  ## Returns
+    * `{:ok, count}` - how many deltas were applied
+    * `{:error, reason}` - if any delta fails; nothing is left applied
+  """
+  @callback record_entry_consumptions(user_id :: String.t(), consumptions :: [map()]) ::
+              {:ok, non_neg_integer()} | {:error, term()}
+
+  @doc """
   Atomically records every given consumption delta (each added to that
   entry's existing cumulative total, same as `record_entry_consumption/4`)
   and logs the Playtime Used record for the spend that caused them, as one

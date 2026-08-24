@@ -221,9 +221,14 @@
                 required
               />
             </div>
+            <%!-- phx-disable-with blocks the double-submit that would
+            otherwise draw the same entries down twice: a spend is a
+            read-modify-write over the Entry Consumption Ledger (ADR-0012),
+            so two in-flight spends both see the same pre-spend remaining. --%>
             <button
               type="submit"
-              class="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold py-3 px-6 rounded-xl hover:from-orange-600 hover:to-red-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+              phx-disable-with="Logging..."
+              class="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold py-3 px-6 rounded-xl hover:from-orange-600 hover:to-red-600 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               Log Playtime
             </button>

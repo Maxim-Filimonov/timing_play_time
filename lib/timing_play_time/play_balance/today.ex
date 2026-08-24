@@ -37,7 +37,7 @@ defmodule TimingPlayTime.PlayBalance.Today do
       sanity check, not a hard invariant. This ADR-0012 also removed the old
       `:backlog_drawn`,
       `:backlog_remaining`, and `:receipts` — the last because a spend's
-      receipt is now returned directly by `PlayBalance.log_spend/4` at the
+      receipt is now returned directly by `PlayBalance.log_spend/6` at the
       moment it's logged, rather than reconstructed here by replaying
       usage history.
   """
