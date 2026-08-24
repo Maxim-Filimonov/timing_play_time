@@ -11,42 +11,35 @@ defmodule TimingPlayTime.PlayBalance.Today do
     * `:week_earned` / `:week_used` - the Entry Expiry Window's raw
       totals: every in-window entry's original `play_minutes`, and every
       recent usage's `minutes`, both summed with no ledger involved.
-    * `:backlog_drawn` - the one figure here that *does* need the Entry
-      Consumption Ledger: the total minutes this week's usages drew from
-      entries *outside* the window, once in-window entries ran out. Not
-      counted in `:week_earned`, so spending against it wouldn't
-      otherwise show up anywhere in this week's math.
-    * `:backlog_remaining` - the flip side of `:backlog_drawn`: total
-      unspent `remaining` minutes still sitting on entries *outside* the
-      Entry Expiry Window, right now. This is what a large overflow spend
-      actually draws on before `:reserve` would ever go negative — a User
-      logging a spend well past what Reserve shows can be surprised when
-      Reserve holds steady, because it silently drew from here instead
-      (see `TimingPlayTime.PlayBalance.compute_today/4`'s moduledoc).
-      Unbounded and Timing-entries-only, same as `:backlog_drawn` — never
-      negative (each entry's `:remaining` floors at 0).
     * `:pushscroll_balance` - the current Manual Sync value.
     * `:today_net` - today's earned Play Minutes, net of the Entry
       Consumption Ledger's draw-down. Never negative.
     * `:reserve` - prior-days' User Displayed Total plus Pushscroll
-      Balance, minus any unmatched overflow. Can go negative.
+      Balance, minus any unmatched overflow (`:deficit`, see
+      `TimingPlayTime.PlayBalance.compute_today/4`). Can go negative — as
+      of ADR-0012, more readily than before, since a spend can no longer
+      fall back on Backlog once today's and Reserve's in-window entries
+      run dry.
     * `:playtime` - `:today_net + :reserve`, the dashboard's hero figure.
       Unclamped.
 
-      **`playtime == week_earned - week_used + backlog_drawn +
-      pushscroll_balance`, exactly, always** — the ledger's `:deficit` is
-      by construction the part of `week_used` that didn't come out of any
-      entry's `remaining`, in-window or not (`consumed_in_window +
-      backlog_drawn + deficit == week_used`), so it cancels out of this
-      identity algebraically even though it's very much present inside
-      `today_net`/`reserve`'s own math (see
+      **`playtime == week_earned - week_used + pushscroll_balance`,
+      for almost every spend** logged after
+      [ADR-0012](../../../docs/adr/0012-persisted-entry-consumption-ledger-with-window-bounded-spending.md),
+      since a spend can no longer draw on Backlog, there's nothing outside
+      this week's own earned/used to reconcile (see
       `TimingPlayTime.PlayBalance.compute_today/4` for the full
-      derivation). This is what makes `week_earned`/`week_used`/
-      `backlog_drawn` worth showing next to `playtime` — checkable by eye,
-      unlike `today_net + reserve`.
-
-    * `:receipts` - one Spend Receipt per usage (see
-      `TimingPlayTime.EntryLedger.replay/4`).
+      derivation). One known gap: an entry can age out of the window (from
+      a *later* read) after funding a usage that's still in-window at that
+      read — an entry is always at least as old as the usage it funded.
+      ADR-0010's `backlog_drawn` used to paper over exactly this; ADR-0012
+      dropped it deliberately (KISS) rather than replace it, so this is a
+      sanity check, not a hard invariant. This ADR-0012 also removed the old
+      `:backlog_drawn`,
+      `:backlog_remaining`, and `:receipts` — the last because a spend's
+      receipt is now returned directly by `PlayBalance.log_spend/6` at the
+      moment it's logged, rather than reconstructed here by replaying
+      usage history.
   """
 
   @enforce_keys [
@@ -54,13 +47,10 @@ defmodule TimingPlayTime.PlayBalance.Today do
     :used_today,
     :week_earned,
     :week_used,
-    :backlog_drawn,
-    :backlog_remaining,
     :pushscroll_balance,
     :today_net,
     :reserve,
-    :playtime,
-    :receipts
+    :playtime
   ]
   defstruct @enforce_keys
 
@@ -69,12 +59,9 @@ defmodule TimingPlayTime.PlayBalance.Today do
           used_today: float(),
           week_earned: float(),
           week_used: float(),
-          backlog_drawn: float(),
-          backlog_remaining: float(),
           pushscroll_balance: float(),
           today_net: float(),
           reserve: float(),
-          playtime: float(),
-          receipts: [TimingPlayTime.EntryLedger.receipt()]
+          playtime: float()
         }
 end

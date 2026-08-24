@@ -152,6 +152,82 @@ defmodule TimingPlayTime.EntryLedgerTest do
     end
   end
 
+  describe "build_entries/2" do
+    test "applies each Activity's multiplier and tags entries with the Activity" do
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 2.0}]
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: "e1"}
+        ]
+      }
+
+      assert [entry] = EntryLedger.build_entries(activities, raw_entries)
+      assert entry.activity_id == "a1"
+      assert entry.time_entry_id == "e1"
+      assert entry.play_minutes == 20.0
+      assert entry.start_date == ~U[2026-07-25 01:00:00Z]
+    end
+
+    test "normalizes every time_entry_id to a string, including the start_date fallback" do
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0}]
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: 12_345},
+          %{start_date: ~U[2026-07-26 01:00:00Z], minutes: 10.0}
+        ]
+      }
+
+      assert [with_id, without_id] = EntryLedger.build_entries(activities, raw_entries)
+      assert with_id.time_entry_id == "12345"
+      assert is_binary(without_id.time_entry_id)
+    end
+
+    test "skips an Activity with no entries in the fetch" do
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0}]
+
+      assert EntryLedger.build_entries(activities, %{}) == []
+    end
+  end
+
+  describe "fetch/4" do
+    test "returns the entries tagged, on success" do
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      entries = %{"coding-proj-1" => []}
+      list_entries = fn _activities, _opts -> {:ok, entries} end
+
+      assert {:ok, ^entries} =
+               EntryLedger.fetch(activities, ~U[2026-07-25 10:00:00Z], [], list_entries)
+    end
+
+    test "propagates a fetch error rather than swallowing it to an empty map" do
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      list_entries = fn _activities, _opts -> {:error, :boom} end
+
+      assert {:error, :boom} =
+               EntryLedger.fetch(activities, ~U[2026-07-25 10:00:00Z], [], list_entries)
+    end
+
+    test "passes the caller's opts through, alongside :to" do
+      test_pid = self()
+      activities = [%{time_source_identifier: "coding-proj-1"}]
+      now = ~U[2026-07-25 10:00:00Z]
+      window_start = ~U[2026-07-18 10:00:00Z]
+
+      list_entries = fn _activities, opts ->
+        send(test_pid, {:list_entries_opts, opts})
+        {:ok, %{}}
+      end
+
+      EntryLedger.fetch(activities, now, [from: window_start], list_entries)
+
+      assert_received {:list_entries_opts, opts}
+      assert Keyword.get(opts, :to) == now
+      assert Keyword.get(opts, :from) == window_start
+    end
+  end
+
   describe "replay/3 deficit" do
     test "is zero when every usage is fully covered" do
       entries = [%{activity_id: "coding", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}]
@@ -169,6 +245,102 @@ defmodule TimingPlayTime.EntryLedgerTest do
 
       assert %{deficit: 45.0, receipts: receipts} = EntryLedger.replay([], usages, @tz)
       assert [%{breakdown: %{}}, %{breakdown: %{}}] = receipts
+    end
+  end
+
+  describe "replay/3 with a pre-loaded :remaining (ADR-0012's persisted ledger)" do
+    test "consumes from the given :remaining rather than resetting it to play_minutes" do
+      # An entry already partially drawn on by a previous, already-persisted
+      # spend: 20 earned, only 5 left.
+      entries = [
+        %{
+          activity_id: "coding",
+          start_date: ~U[2026-07-25 01:00:00Z],
+          play_minutes: 20.0,
+          remaining: 5.0
+        }
+      ]
+
+      usages = [%{id: "u1", minutes: 5.0, logged_at: ~U[2026-07-25 05:00:00Z]}]
+
+      assert %{entries: [replayed], deficit: deficit} = EntryLedger.replay(entries, usages, @tz)
+
+      assert deficit == 0.0
+      assert replayed.remaining == 0.0
+      # The original earned total is untouched — only :remaining moved.
+      assert replayed.play_minutes == 20.0
+    end
+
+    test "defaults :remaining to play_minutes when the entry doesn't already carry one" do
+      entries = [%{activity_id: "coding", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}]
+
+      assert %{entries: [replayed]} = EntryLedger.replay(entries, [], @tz)
+
+      assert replayed.remaining == 20.0
+    end
+  end
+
+  describe "index_consumption/1" do
+    test "keys consumed minutes by {activity_id, time_entry_id}" do
+      rows = [
+        %{activity_id: "coding", time_entry_id: "t1", consumed_minutes: 12.0},
+        %{activity_id: "coding", time_entry_id: "t2", consumed_minutes: 4.0}
+      ]
+
+      assert EntryLedger.index_consumption(rows) == %{
+               {"coding", "t1"} => 12.0,
+               {"coding", "t2"} => 4.0
+             }
+    end
+
+    test "is an empty map for no rows" do
+      assert EntryLedger.index_consumption([]) == %{}
+    end
+  end
+
+  describe "with_remaining/2" do
+    test "sets remaining to play_minutes minus indexed consumption for that entry" do
+      entries = [
+        %{activity_id: "coding", time_entry_id: "t1", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}
+      ]
+
+      index = EntryLedger.index_consumption([%{activity_id: "coding", time_entry_id: "t1", consumed_minutes: 12.0}])
+
+      assert [%{remaining: 8.0}] = EntryLedger.with_remaining(entries, index)
+    end
+
+    test "defaults remaining to the full play_minutes when the entry has no consumption row" do
+      entries = [
+        %{activity_id: "coding", time_entry_id: "t1", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}
+      ]
+
+      assert [%{remaining: 20.0}] = EntryLedger.with_remaining(entries, %{})
+    end
+
+    test "floors remaining at zero rather than going negative" do
+      entries = [
+        %{activity_id: "coding", time_entry_id: "t1", start_date: ~U[2026-07-25 01:00:00Z], play_minutes: 20.0}
+      ]
+
+      index = EntryLedger.index_consumption([%{activity_id: "coding", time_entry_id: "t1", consumed_minutes: 25.0}])
+
+      assert [%{remaining: remaining}] = EntryLedger.with_remaining(entries, index)
+      assert remaining == 0.0
+    end
+  end
+
+  describe "total_consumed/1" do
+    test "sums consumed minutes across every row, regardless of activity or entry" do
+      rows = [
+        %{activity_id: "coding", time_entry_id: "t1", consumed_minutes: 12.0},
+        %{activity_id: "learning", time_entry_id: "t2", consumed_minutes: 4.5}
+      ]
+
+      assert EntryLedger.total_consumed(rows) == 16.5
+    end
+
+    test "is zero for no rows" do
+      assert EntryLedger.total_consumed([]) == 0.0
     end
   end
 end

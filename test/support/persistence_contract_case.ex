@@ -310,6 +310,165 @@ defmodule TimingPlayTime.PersistenceContractCase do
           assert {:ok, 0.0} = @persistence.total_playtime_used(user_id)
         end
       end
+
+      describe "entry consumption (ADR-0012)" do
+        test "list_entry_consumption/1 returns an empty list when nothing's been consumed", %{
+          user_id: user_id
+        } do
+          assert {:ok, []} = @persistence.list_entry_consumption(user_id)
+        end
+
+        test "record_entry_consumption/4 creates a row and returns the cumulative total", %{
+          user_id: user_id
+        } do
+          assert {:ok, 12.0} =
+                   @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 12.0)
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.activity_id == "activity-1"
+          assert row.time_entry_id == "entry-1"
+          assert row.consumed_minutes == 12.0
+        end
+
+        test "record_entry_consumption/4 adds to, rather than overwrites, an existing row for the same entry",
+             %{user_id: user_id} do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 12.0)
+
+          assert {:ok, 20.0} =
+                   @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 8.0)
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.consumed_minutes == 20.0
+        end
+
+        test "record_entry_consumption/4 keeps separate entries on the same activity independent",
+             %{user_id: user_id} do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 12.0)
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-2", 5.0)
+
+          assert {:ok, rows} = @persistence.list_entry_consumption(user_id)
+          assert length(rows) == 2
+
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-1")).consumed_minutes == 12.0
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-2")).consumed_minutes == 5.0
+        end
+
+        test "keeps the same {activity_id, time_entry_id} independent across two users", %{
+          user_id: user_id,
+          other_user_id: other_user_id
+        } do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 10.0)
+          {:ok, _} = @persistence.record_entry_consumption(other_user_id, "activity-1", "entry-1", 999.0)
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.consumed_minutes == 10.0
+
+          assert {:ok, [other_row]} = @persistence.list_entry_consumption(other_user_id)
+          assert other_row.consumed_minutes == 999.0
+        end
+
+        test "entry consumption is isolated per user", %{
+          user_id: user_id,
+          other_user_id: other_user_id
+        } do
+          {:ok, _} = @persistence.record_entry_consumption(other_user_id, "activity-1", "entry-1", 999.0)
+
+          assert {:ok, []} = @persistence.list_entry_consumption(user_id)
+        end
+      end
+
+      describe "record_entry_consumptions/2 (the backfill's atomic batch write)" do
+        test "records every given row in one call", %{user_id: user_id} do
+          consumptions = [
+            %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 12.0},
+            %{activity_id: "activity-2", time_entry_id: "entry-2", minutes: 3.0}
+          ]
+
+          assert {:ok, 2} = @persistence.record_entry_consumptions(user_id, consumptions)
+
+          assert {:ok, rows} = @persistence.list_entry_consumption(user_id)
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-1")).consumed_minutes == 12.0
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-2")).consumed_minutes == 3.0
+        end
+
+        test "adds to, rather than overwrites, existing consumption on an entry", %{user_id: user_id} do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 5.0)
+
+          assert {:ok, 1} =
+                   @persistence.record_entry_consumptions(user_id, [
+                     %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 7.0}
+                   ])
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.consumed_minutes == 12.0
+        end
+
+        test "writes nothing at all when any row in the batch is invalid", %{user_id: user_id} do
+          consumptions = [
+            %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 12.0},
+            %{activity_id: nil, time_entry_id: "entry-2", minutes: 3.0}
+          ]
+
+          assert {:error, _reason} =
+                   @persistence.record_entry_consumptions(user_id, consumptions)
+
+          # All-or-nothing: a half-seeded ledger would report a permanently
+          # wrong deficit, and the backfill refuses to re-run over existing
+          # rows (ADR-0012).
+          assert {:ok, []} = @persistence.list_entry_consumption(user_id)
+        end
+
+        test "accepts an empty batch", %{user_id: user_id} do
+          assert {:ok, 0} = @persistence.record_entry_consumptions(user_id, [])
+        end
+      end
+
+      describe "record_spend/4 (ADR-0012's atomic write path)" do
+        test "atomically records every consumption delta and logs the usage in one call", %{
+          user_id: user_id
+        } do
+          consumptions = [
+            %{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 12.0},
+            %{activity_id: "activity-1", time_entry_id: "entry-2", minutes: 3.0}
+          ]
+
+          logged_at = ~U[2024-01-15 10:30:00Z]
+
+          assert {:ok, usage} = @persistence.record_spend(user_id, consumptions, 15.0, logged_at)
+          assert usage.id
+          assert usage.minutes == 15.0
+          assert usage.logged_at == logged_at
+
+          assert {:ok, rows} = @persistence.list_entry_consumption(user_id)
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-1")).consumed_minutes == 12.0
+          assert Enum.find(rows, &(&1.time_entry_id == "entry-2")).consumed_minutes == 3.0
+
+          assert {:ok, [logged]} = @persistence.list_playtime_used(user_id)
+          assert logged.id == usage.id
+        end
+
+        test "adds to, rather than overwrites, existing consumption on an entry", %{user_id: user_id} do
+          {:ok, _} = @persistence.record_entry_consumption(user_id, "activity-1", "entry-1", 5.0)
+
+          assert {:ok, _usage} =
+                   @persistence.record_spend(
+                     user_id,
+                     [%{activity_id: "activity-1", time_entry_id: "entry-1", minutes: 7.0}],
+                     7.0,
+                     DateTime.utc_now()
+                   )
+
+          assert {:ok, [row]} = @persistence.list_entry_consumption(user_id)
+          assert row.consumed_minutes == 12.0
+        end
+
+        test "logs the usage even with an empty consumptions list (a fully unmatched, all-deficit spend)",
+             %{user_id: user_id} do
+          assert {:ok, usage} = @persistence.record_spend(user_id, [], 30.0, DateTime.utc_now())
+          assert usage.minutes == 30.0
+          assert {:ok, []} = @persistence.list_entry_consumption(user_id)
+        end
+      end
     end
   end
 end

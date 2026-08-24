@@ -6,7 +6,6 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   alias TimingPlayTime.EntryLedger
   alias TimingPlayTime.ActivityManager
   alias TimingPlayTime.ManualSync
-  alias TimingPlayTime.PlaytimeUsed
   alias TimingPlayTime.Accounts
   alias TimingPlayTime.LocalDay
 
@@ -80,23 +79,44 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   def handle_event("log_playtime", %{"minutes" => minutes_str}, socket) do
     case Float.parse(minutes_str) do
       {minutes, _} when minutes > 0 ->
-        {:ok, usage} = PlaytimeUsed.log_usage(socket.assigns.current_user.id, minutes)
+        user = socket.assigns.current_user
+        now = DateTime.utc_now()
+        time_source_opts = client_opts(socket)
 
-        broadcast_balance_updated(socket.assigns.current_user)
+        # One shared Timing fetch, reused both for log_spend/6's draw-down
+        # and for the post-spend refresh below — Timing's own entries are
+        # unaffected by this app's spend, only our own persisted
+        # consumption is, so there's nothing stale about reusing it. Strict
+        # (`fetch_activities_and_entries/1`): a fetch failure must abort the
+        # spend, not silently settle it against an empty pool.
+        {_activities, totals, entries_result} = fetch_activities_and_entries(socket)
 
-        {_activities, totals, raw_entries} =
-          fetch_activities_and_balance_fetchers(socket)
+        case spend(entries_result, user, minutes, now, time_source_opts) do
+          {:ok, raw_entries, %{receipt: receipt}} ->
+            broadcast_balance_updated(user)
 
-        socket = load_balance(socket, totals, raw_entries)
+            socket = load_balance(socket, totals, raw_entries)
 
-        socket =
-          put_flash(
-            socket,
-            :info,
-            "Logged #{minutes} play minutes!" <> receipt_message(socket, usage.id)
-          )
+            socket =
+              put_flash(
+                socket,
+                :info,
+                "Logged #{minutes} play minutes!" <> receipt_message(receipt, socket.assigns.activities)
+              )
 
-        {:noreply, socket}
+            {:noreply, socket}
+
+          {:error, :no_timezone} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Set your timezone in Settings to log playtime."
+             )}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Couldn't log playtime")}
+        end
 
       _ ->
         {:noreply, put_flash(socket, :error, "Please enter a valid number")}
@@ -289,7 +309,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # sharing a fetch, that's a separate call per caller. `totals`
   # (`PlayBalance.get_totals/3`) is every given Activity's cumulative and
   # today-scoped totals in one shot (ADR-0008); `raw_entries`
-  # (`EntryLedger.load/4`) is a second, separate fetch of individual dated
+  # (`EntryLedger.fetch/4`) is a second, separate fetch of individual dated
   # entries for the Entry Consumption Ledger (ADR-0010) — kept apart from
   # `totals` so the debug-only Play Balance reveal keeps fetching exactly
   # as before. `fetch_activities_and_balance_fetchers/1` makes each real
@@ -329,13 +349,10 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     used_today: 0.0,
     week_earned: 0.0,
     week_used: 0.0,
-    backlog_drawn: 0.0,
-    backlog_remaining: 0.0,
     pushscroll_balance: 0.0,
     today_net: 0.0,
     reserve: 0.0,
-    playtime: 0.0,
-    receipts: []
+    playtime: 0.0
   }
 
   # Briefly nil on a brand-new anonymous user, until the `.TimezoneDetector`
@@ -353,20 +370,18 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     end
   end
 
-  # The Spend Receipt for a just-logged usage, formatted as a flash-message
-  # suffix — always appended (ADR-0010: "always shown, even for
-  # single-Activity spends", so the UI element is predictable rather than
-  # intermittent). Empty when nothing was matched (a fully unmatched spend,
-  # the ledger's `:deficit`) or `:today` couldn't be loaded (no timezone yet).
-  defp receipt_message(socket, usage_id) do
-    with %{receipts: receipts} <- socket.assigns.today,
-         %{breakdown: breakdown} when map_size(breakdown) > 0 <-
-           Enum.find(receipts, &(&1.usage_id == usage_id)) do
-      " Funded by " <> format_breakdown(breakdown, socket.assigns.activities) <> "."
-    else
-      _ -> ""
-    end
+  # The Spend Receipt for the usage `log_playtime` just logged, formatted as
+  # a flash-message suffix — always appended (ADR-0010: "always shown, even
+  # for single-Activity spends", so the UI element is predictable rather
+  # than intermittent). Returned directly by `PlayBalance.log_spend/6`
+  # (ADR-0012) rather than looked up afterward, since reads no longer
+  # replay usage history. Empty when nothing was matched (a fully unmatched
+  # spend, the ledger's `:deficit`).
+  defp receipt_message(%{breakdown: breakdown}, activities) when map_size(breakdown) > 0 do
+    " Funded by " <> format_breakdown(breakdown, activities) <> "."
   end
+
+  defp receipt_message(_receipt, _activities), do: ""
 
   defp format_breakdown(breakdown, activities) do
     activity_name = fn activity_id ->
@@ -430,14 +445,30 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
   # Every caller in this pipeline ends up needing both `totals`
   # (`PlayBalance.get_totals/3` — the debug Play Balance, and each
-  # Activity's "Today" figure) and `raw_entries` (`EntryLedger.load/4` —
+  # Activity's "Today" figure) and `raw_entries` (`EntryLedger.fetch/4` —
   # Reserve/Playtime, and each Activity's "This Week" figure — ADR-0010),
   # so there's just the one combined fetch rather than a `totals`-only
   # variant some callers use and others don't. Each is fetched exactly
-  # once here and passed down as a plain value — no caller re-fetches, and
-  # none can accidentally narrow the window either (EntryLedger.load/4's
-  # moduledoc).
+  # once here and passed down as a plain value, so no caller re-fetches —
+  # and the window bound is applied in exactly one place, below.
   defp fetch_activities_and_balance_fetchers(socket) do
+    {activities, totals, entries_result} = fetch_activities_and_entries(socket)
+
+    entries =
+      case entries_result do
+        {:ok, entries} -> entries
+        {:error, _reason} -> %{}
+      end
+
+    {activities, totals, entries}
+  end
+
+  # The strict counterpart, for the one caller that writes rather than
+  # displays: `log_playtime` must not settle a spend against entries a
+  # failed fetch turned into an empty map, since the resulting `deficit` is
+  # permanent (ADR-0012). Display paths above swallow it, where an empty
+  # fetch only under-reports until the next successful read.
+  defp fetch_activities_and_entries(socket) do
     user = socket.assigns.current_user
     time_source_opts = client_opts(socket)
     now = DateTime.utc_now()
@@ -450,9 +481,25 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
     today_from = today_from(user, now)
     totals = PlayBalance.get_totals(activities, [to: now, today_from: today_from] ++ time_source_opts)
-    raw_entries = EntryLedger.load(activities, now, time_source_opts)
 
-    {activities, totals, raw_entries}
+    # Bounded to the Entry Expiry Window (ADR-0012) — unlike `totals` above
+    # (the debug-only, deliberately unbounded Play Balance/per-Activity
+    # cumulative figures, ADR-0008), nothing older than the window is ever
+    # displayed or spendable any more, so there's no reason to fetch it.
+    window_start = PlayBalance.expiry_window_start(now)
+    entries_result = EntryLedger.fetch(activities, now, [from: window_start] ++ time_source_opts)
+
+    {activities, totals, entries_result}
+  end
+
+  # Carries the successfully-fetched entries back out alongside the spend's
+  # own result, so the post-spend refresh reuses the same fetch.
+  defp spend({:error, reason}, _user, _minutes, _now, _time_source_opts), do: {:error, reason}
+
+  defp spend({:ok, raw_entries}, user, minutes, now, time_source_opts) do
+    with {:ok, result} <- PlayBalance.log_spend(user, minutes, now, time_source_opts, raw_entries) do
+      {:ok, raw_entries, result}
+    end
   end
 
   defp today_from(%{timezone: nil}, _now), do: nil

@@ -17,6 +17,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
 
   alias TimingPlayTime.Repo
   alias TimingPlayTime.Plugins.Persistence.Sqlite.Activity
+  alias TimingPlayTime.Plugins.Persistence.Sqlite.EntryConsumption
   alias TimingPlayTime.Plugins.Persistence.Sqlite.ManualSync
   alias TimingPlayTime.Plugins.Persistence.Sqlite.PlaytimeUsed
 
@@ -117,6 +118,85 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
     {:ok, total || 0.0}
   end
 
+  @impl true
+  def record_entry_consumption(user_id, activity_id, time_entry_id, minutes) do
+    insert_or_increment_consumption(user_id, activity_id, time_entry_id, minutes)
+    |> to_result(& &1.consumed_minutes)
+  end
+
+  @impl true
+  def list_entry_consumption(user_id) do
+    rows =
+      EntryConsumption
+      |> where([c], c.user_id == ^user_id)
+      |> Repo.all()
+      |> Enum.map(&entry_consumption_to_map/1)
+
+    {:ok, rows}
+  end
+
+  @impl true
+  def record_entry_consumptions(user_id, consumptions) do
+    Repo.transaction(fn ->
+      apply_consumptions(user_id, consumptions)
+      length(consumptions)
+    end)
+  end
+
+  @impl true
+  def record_spend(user_id, consumptions, minutes, logged_at) do
+    Repo.transaction(fn ->
+      apply_consumptions(user_id, consumptions)
+
+      case log_playtime_used(user_id, minutes, logged_at) do
+        {:ok, usage} -> usage
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  # Rolls the surrounding transaction back on the first failing delta, so
+  # both write paths that use it (`record_spend/4`, `record_entry_consumptions/2`)
+  # are all-or-nothing.
+  defp apply_consumptions(user_id, consumptions) do
+    Enum.each(consumptions, fn %{activity_id: activity_id, time_entry_id: time_entry_id, minutes: delta} ->
+      case insert_or_increment_consumption(user_id, activity_id, time_entry_id, delta) do
+        {:ok, _row} -> :ok
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  # Atomic upsert-increment (`ON CONFLICT ... DO UPDATE SET consumed_minutes
+  # = consumed_minutes + ?`), rather than a separate read-then-write — two
+  # concurrent calls for the same {user_id, activity_id, time_entry_id}
+  # would otherwise race: both could read the same pre-write value and one's
+  # increment would silently clobber the other's (ADR-0012).
+  #
+  # This makes the *increment* atomic, and nothing more. The wider
+  # read-modify-write a spend performs — `PlayBalance.log_spend/6` reading
+  # current consumption, computing a FIFO draw-down, then writing deltas —
+  # is not serialized here: two concurrent spends would each draw the same
+  # entries down and this would faithfully sum both, pushing an entry's
+  # consumed_minutes past its earned play_minutes. The dashboard prevents
+  # the realistic trigger (double-submit) at the UI, via phx-disable-with.
+  defp insert_or_increment_consumption(user_id, activity_id, time_entry_id, minutes) do
+    increment_query = from(c in EntryConsumption, update: [inc: [consumed_minutes: ^minutes]])
+
+    %EntryConsumption{}
+    |> EntryConsumption.changeset(%{
+      user_id: user_id,
+      activity_id: activity_id,
+      time_entry_id: time_entry_id,
+      consumed_minutes: minutes
+    })
+    |> Repo.insert(
+      on_conflict: increment_query,
+      conflict_target: [:user_id, :activity_id, :time_entry_id],
+      returning: true
+    )
+  end
+
   # Private
 
   defp fetch_activity(user_id, id) do
@@ -149,6 +229,14 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
       id: usage.id,
       minutes: usage.minutes,
       logged_at: usage.logged_at
+    }
+  end
+
+  defp entry_consumption_to_map(%EntryConsumption{} = row) do
+    %{
+      activity_id: row.activity_id,
+      time_entry_id: row.time_entry_id,
+      consumed_minutes: row.consumed_minutes
     }
   end
 end
