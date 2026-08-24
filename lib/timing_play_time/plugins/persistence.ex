@@ -118,4 +118,61 @@ defmodule TimingPlayTime.Plugins.Persistence do
     * `{:error, reason}` - If calculation fails
   """
   @callback total_playtime_used(user_id :: String.t()) :: {:ok, float()} | {:error, term()}
+
+  @doc """
+  Records that `minutes` of a specific Timing entry's Play Minutes have
+  been consumed by a spend, for the Entry Consumption Ledger (ADR-0012).
+  Adds to any minutes already recorded against that same `{activity_id,
+  time_entry_id}` — a caller draws down an entry over multiple calls (one
+  per spend), never overwrites what a previous spend already recorded.
+
+  ## Returns
+    * `{:ok, total_consumed}` - The entry's new cumulative consumed minutes
+    * `{:error, reason}` - If the write fails
+  """
+  @callback record_entry_consumption(
+              user_id :: String.t(),
+              activity_id :: String.t(),
+              time_entry_id :: String.t(),
+              minutes :: float()
+            ) :: {:ok, float()} | {:error, term()}
+
+  @doc """
+  Lists every Timing entry a User has ever drawn on, each with its
+  cumulative consumed minutes (ADR-0012's Entry Consumption Ledger). Sparse
+  — an entry nobody's spent against has no row here at all.
+
+  ## Returns
+    * `{:ok, [%{activity_id:, time_entry_id:, consumed_minutes:}]}`
+    * `{:error, reason}` - If retrieval fails
+  """
+  @callback list_entry_consumption(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
+
+  @doc """
+  Atomically records every given consumption delta (each added to that
+  entry's existing cumulative total, same as `record_entry_consumption/4`)
+  and logs the Playtime Used record for the spend that caused them, as one
+  indivisible write (ADR-0012) — a spend either fully lands (every entry's
+  draw-down and the usage record together) or none of it does, so a
+  mid-write failure can never leave entries marked as consumed with no
+  corresponding usage, or a logged usage with silently-missing draw-down.
+
+  ## Parameters
+    * `consumptions` - a list of `%{activity_id:, time_entry_id:,
+      minutes:}` deltas to add; may be empty (a fully unmatched, all-deficit
+      spend still logs its usage record)
+    * `minutes` / `logged_at` - the usage record itself, same as
+      `log_playtime_used/3`
+
+  ## Returns
+    * `{:ok, usage}` - the created usage record
+    * `{:error, reason}` - if the write fails; nothing is left partially
+      applied
+  """
+  @callback record_spend(
+              user_id :: String.t(),
+              consumptions :: [map()],
+              minutes :: float(),
+              logged_at :: DateTime.t()
+            ) :: {:ok, map()} | {:error, term()}
 end

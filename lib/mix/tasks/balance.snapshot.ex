@@ -144,29 +144,20 @@ defmodule Mix.Tasks.Balance.Snapshot do
 
   defp print_today(user, now, time_source_opts) do
     with {:ok, today} <- PlayBalance.compute_today(user, now, time_source_opts) do
-      reconciled =
-        today.week_earned - today.week_used + today.backlog_drawn + today.pushscroll_balance
+      reconciled = today.week_earned - today.week_used + today.pushscroll_balance
 
       Mix.shell().info("""
-      -- Playtime (windowed, ledger-based, ADR-0010) --
+      -- Playtime (windowed, persisted-ledger, ADR-0012) --
       Earned today:        #{fmt(today.earned_today)}
       Used today:          #{fmt(today.used_today)}
       This Week Earned:    #{fmt(today.week_earned)}
       This Week Used:      #{fmt(today.week_used)}
-      Drawn from Backlog:  #{fmt(today.backlog_drawn)}
-      Backlog Remaining:   #{fmt(today.backlog_remaining)}
       Pushscroll Balance:  #{fmt(today.pushscroll_balance)}
       Today's PT:          #{fmt(today.today_net)}
       Reserve:             #{fmt(today.reserve)}
       Playtime:            #{fmt(today.playtime)}
-      Reconciled (week_earned - week_used + backlog_drawn + pushscroll): #{fmt(reconciled)} #{if float_eq?(reconciled, today.playtime), do: "(matches)", else: "(MISMATCH!)"}
-
-      Spend Receipts (#{length(today.receipts)}):
+      Reconciled (week_earned - week_used + pushscroll): #{fmt(reconciled)} #{if float_eq?(reconciled, today.playtime), do: "(matches)", else: "(MISMATCH!)"}
       """)
-
-      Enum.each(today.receipts, fn receipt ->
-        Mix.shell().info("  #{inspect(receipt.usage_id)}: #{inspect(receipt.breakdown)}")
-      end)
     end
   end
 

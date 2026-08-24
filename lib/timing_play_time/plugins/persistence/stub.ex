@@ -14,6 +14,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
   @activities_table :stub_activities
   @manual_sync_table :stub_manual_sync
   @playtime_used_table :stub_playtime_used
+  @entry_consumption_table :stub_entry_consumption
 
   # Client API
 
@@ -75,6 +76,21 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
     GenServer.call(__MODULE__, {:total_playtime_used, user_id})
   end
 
+  @impl true
+  def record_entry_consumption(user_id, activity_id, time_entry_id, minutes) do
+    GenServer.call(__MODULE__, {:record_entry_consumption, user_id, activity_id, time_entry_id, minutes})
+  end
+
+  @impl true
+  def list_entry_consumption(user_id) do
+    GenServer.call(__MODULE__, {:list_entry_consumption, user_id})
+  end
+
+  @impl true
+  def record_spend(user_id, consumptions, minutes, logged_at) do
+    GenServer.call(__MODULE__, {:record_spend, user_id, consumptions, minutes, logged_at})
+  end
+
   # Server callbacks
 
   @impl true
@@ -82,6 +98,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
     :ets.new(@activities_table, [:named_table, :set, :public])
     :ets.new(@manual_sync_table, [:named_table, :bag, :public])
     :ets.new(@playtime_used_table, [:named_table, :ordered_set, :public])
+    :ets.new(@entry_consumption_table, [:named_table, :set, :public])
 
     {:ok, %{}}
   end
@@ -202,14 +219,64 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
   end
 
   @impl true
+  def handle_call({:record_entry_consumption, user_id, activity_id, time_entry_id, minutes}, _from, state) do
+    total = increment_consumption(user_id, activity_id, time_entry_id, minutes)
+    {:reply, {:ok, total}, state}
+  end
+
+  # GenServer.call is already fully serialized (single process, one message
+  # at a time), so handling both writes inside a single handler makes them
+  # atomic for free — no other caller can observe a state where one has
+  # landed and the other hasn't (ADR-0012, mirrors Sqlite's Repo.transaction).
+  @impl true
+  def handle_call({:record_spend, user_id, consumptions, minutes, logged_at}, _from, state) do
+    Enum.each(consumptions, fn %{activity_id: activity_id, time_entry_id: time_entry_id, minutes: delta} ->
+      increment_consumption(user_id, activity_id, time_entry_id, delta)
+    end)
+
+    id = generate_id()
+    usage = %{id: id, minutes: minutes, logged_at: logged_at, user_id: user_id}
+    :ets.insert(@playtime_used_table, {id, usage})
+
+    {:reply, {:ok, usage}, state}
+  end
+
+  @impl true
+  def handle_call({:list_entry_consumption, user_id}, _from, state) do
+    rows =
+      @entry_consumption_table
+      |> :ets.tab2list()
+      |> Enum.filter(fn {{row_user_id, _activity_id, _time_entry_id}, _consumed} -> row_user_id == user_id end)
+      |> Enum.map(fn {{_user_id, activity_id, time_entry_id}, consumed} ->
+        %{activity_id: activity_id, time_entry_id: time_entry_id, consumed_minutes: consumed}
+      end)
+
+    {:reply, {:ok, rows}, state}
+  end
+
+  @impl true
   def handle_call(:clear_all_state, _from, state) do
     :ets.delete_all_objects(@activities_table)
     :ets.delete_all_objects(@manual_sync_table)
     :ets.delete_all_objects(@playtime_used_table)
+    :ets.delete_all_objects(@entry_consumption_table)
     {:reply, :ok, state}
   end
 
   defp generate_id do
     :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
+  end
+
+  defp increment_consumption(user_id, activity_id, time_entry_id, minutes) do
+    key = {user_id, activity_id, time_entry_id}
+
+    total =
+      case :ets.lookup(@entry_consumption_table, key) do
+        [{^key, existing}] -> existing + minutes
+        [] -> minutes
+      end
+
+    :ets.insert(@entry_consumption_table, {key, total})
+    total
   end
 end

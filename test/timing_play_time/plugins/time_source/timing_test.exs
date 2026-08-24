@@ -293,12 +293,32 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
           assert {:ok, by_identifier} = Timing.list_entries([@coding, @learning], client: client)
 
           assert by_identifier["coding-proj-1"] == [
-                   %{start_date: ~U[2026-07-20 09:00:00Z], minutes: 30.0}
+                   %{start_date: ~U[2026-07-20 09:00:00Z], minutes: 30.0, time_entry_id: nil}
                  ]
 
           assert by_identifier["learning-proj-1"] == [
-                   %{start_date: ~U[2026-07-21 09:00:00Z], minutes: 10.0}
+                   %{start_date: ~U[2026-07-21 09:00:00Z], minutes: 10.0, time_entry_id: nil}
                  ]
+        end
+      )
+    end
+
+    test "returns each matched entry's own id as :time_entry_id (ADR-0012's stable consumption key)" do
+      entries = [
+        %{
+          "id" => "42",
+          "duration" => 1800,
+          "project" => %{"self" => "/projects/coding-proj-1"},
+          "start_date" => "2026-07-20T09:00:00+00:00"
+        }
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), entries: entries}],
+        fn client ->
+          assert {:ok, by_identifier} = Timing.list_entries([@coding], client: client)
+
+          assert [%{time_entry_id: "42"}] = by_identifier["coding-proj-1"]
         end
       )
     end

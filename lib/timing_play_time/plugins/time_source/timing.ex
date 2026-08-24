@@ -111,7 +111,11 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   end
 
   defp dated_entry(entry) do
-    %{start_date: parse_datetime(entry["start_date"]), minutes: duration_seconds(entry) / 60}
+    %{
+      start_date: parse_datetime(entry["start_date"]),
+      minutes: duration_seconds(entry) / 60,
+      time_entry_id: entry["id"]
+    }
   end
 
   defp fetch_projects_entries(client, projects, from, to, log_prefix) do

@@ -85,7 +85,12 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
 
     for offset <- 0..days do
       start_date = from_date |> Date.add(offset) |> DateTime.new!(~T[00:00:00], "Etc/UTC")
-      %{start_date: start_date, minutes: rate}
+
+      %{
+        start_date: start_date,
+        minutes: rate,
+        time_entry_id: "#{activity.time_source_identifier}-#{DateTime.to_iso8601(start_date)}"
+      }
     end
   end
 

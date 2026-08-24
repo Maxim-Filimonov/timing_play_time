@@ -56,8 +56,10 @@ defmodule TimingPlayTime.EntryLedger do
 
   @type entry :: %{
           required(:activity_id) => term(),
+          required(:time_entry_id) => term(),
           required(:start_date) => DateTime.t(),
-          required(:play_minutes) => float()
+          required(:play_minutes) => float(),
+          optional(:remaining) => float()
         }
 
   @type usage :: %{
@@ -68,12 +70,19 @@ defmodule TimingPlayTime.EntryLedger do
 
   @type replayed_entry :: %{
           activity_id: term(),
+          time_entry_id: term(),
           start_date: DateTime.t(),
           play_minutes: float(),
           remaining: float()
         }
 
   @type receipt :: %{usage_id: term(), breakdown: %{optional(term()) => float()}}
+
+  @type consumption_row :: %{
+          activity_id: term(),
+          time_entry_id: term(),
+          consumed_minutes: float()
+        }
 
   @doc """
   Fetches every given Activity's individual time entries via the
@@ -105,10 +114,18 @@ defmodule TimingPlayTime.EntryLedger do
   Replays `usages` (any order) against `entries` (any order) in
   chronological order.
 
+  An entry may already carry a `:remaining` (ADR-0012: the persisted
+  Entry Consumption Ledger pre-loads it with `play_minutes` minus whatever
+  was already durably consumed by earlier, already-persisted spends) — that
+  starting value is drawn down instead of being reset to `:play_minutes`.
+  An entry with no `:remaining` defaults to fully unspent (`:play_minutes`),
+  the original behaviour.
+
   Returns:
     * `:entries` - every given entry, annotated with `:remaining` (its
-      `:play_minutes` minus everything drawn from it, floored at 0), sorted
-      by `:start_date`
+      starting `:remaining` — or `:play_minutes`, if none was given — minus
+      everything drawn from it this call, floored at 0), sorted by
+      `:start_date`
     * `:receipts` - one Spend Receipt per usage, in the same order as the
       given `usages`, each a per-Activity breakdown of how much of that
       usage was funded by that Activity's entries
@@ -130,7 +147,7 @@ defmodule TimingPlayTime.EntryLedger do
       |> Enum.sort_by(& &1.start_date, DateTime)
       |> Enum.with_index()
       |> Map.new(fn {entry, index} ->
-        {index, entry |> Map.put(:ledger_id, index) |> Map.put(:remaining, entry.play_minutes)}
+        {index, entry |> Map.put(:ledger_id, index) |> Map.put_new(:remaining, entry.play_minutes)}
       end)
 
     sorted_usages = Enum.sort_by(usages, & &1.logged_at, DateTime)
@@ -207,5 +224,41 @@ defmodule TimingPlayTime.EntryLedger do
     Enum.reduce(spent_from, %{}, fn {activity_id, minutes}, acc ->
       Map.update(acc, activity_id, minutes, &(&1 + minutes))
     end)
+  end
+
+  @doc """
+  Indexes persisted `consumption_row/0`s (ADR-0012) by `{activity_id,
+  time_entry_id}`, for `with_remaining/2`.
+  """
+  @spec index_consumption([consumption_row()]) :: %{optional({term(), term()}) => float()}
+  def index_consumption(rows) do
+    Map.new(rows, &{{&1.activity_id, &1.time_entry_id}, &1.consumed_minutes})
+  end
+
+  @doc """
+  Annotates each entry with `:remaining` (`:play_minutes` minus whatever
+  the indexed consumption (`index_consumption/1`) already recorded against
+  it, floored at 0) — the read-side counterpart to `replay/4`'s
+  pre-loaded-`:remaining` support (ADR-0012). Unlike `replay/4`, this never
+  runs a FIFO draw-down itself; it just looks up already-settled state, so
+  reads no longer need to replay usage history to know what's left.
+  """
+  @spec with_remaining([entry()], %{optional({term(), term()}) => float()}) :: [replayed_entry()]
+  def with_remaining(entries, consumption_index) do
+    Enum.map(entries, fn entry ->
+      consumed = Map.get(consumption_index, {entry.activity_id, entry.time_entry_id}, 0.0)
+      Map.put(entry, :remaining, max(entry.play_minutes - consumed, 0.0))
+    end)
+  end
+
+  @doc """
+  Sums `:consumed_minutes` across every given `consumption_row/0`,
+  regardless of activity, entry, or window — the all-time total of Play
+  Minutes ever actually funded from a Timing entry, used to derive Reserve's
+  permanent `deficit` (ADR-0012) without needing entries fetched at all.
+  """
+  @spec total_consumed([consumption_row()]) :: float()
+  def total_consumed(rows) do
+    Enum.reduce(rows, 0.0, &(&2 + &1.consumed_minutes))
   end
 end

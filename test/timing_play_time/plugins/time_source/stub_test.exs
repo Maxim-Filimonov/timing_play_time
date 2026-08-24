@@ -48,6 +48,19 @@ defmodule TimingPlayTime.Plugins.TimeSource.StubTest do
       assert Enum.map(entries["coding-proj-1"], & &1.minutes) == [45.0, 45.0]
     end
 
+    test "gives each generated entry a stable, unique :time_entry_id (ADR-0012's consumption key)" do
+      to = ~U[2026-07-02 00:00:00Z]
+
+      assert {:ok, entries} = Stub.list_entries([@coding], to: to)
+      ids = Enum.map(entries["coding-proj-1"], & &1.time_entry_id)
+
+      assert Enum.all?(ids, &is_binary/1)
+      assert Enum.uniq(ids) == ids
+
+      assert {:ok, entries_again} = Stub.list_entries([@coding], to: to)
+      assert Enum.map(entries_again["coding-proj-1"], & &1.time_entry_id) == ids
+    end
+
     test "returns an empty list for an activity with no activated_at, given an explicit :from" do
       activity = %{time_source_identifier: "coding-proj-2", activated_at: nil}
       from = ~U[2026-07-03 00:00:00Z]
