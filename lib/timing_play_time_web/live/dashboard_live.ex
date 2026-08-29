@@ -16,6 +16,54 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # closes, which is fine since nobody's looking at it then.
   @refresh_interval_ms :timer.seconds(60)
 
+  # A no-JS +/- toggle for an Activity's Effect: two radio buttons styled as
+  # pills, submitting as the `effect` form field ("positive"/"negative").
+  # Replaces a <select> that rendered near-illegibly in the pink form. The
+  # selected side fills in (green for +, red for −); the meaning is spelled
+  # out in the tooltip and screen-reader label rather than inline text.
+  # Shared by the add and edit forms; the edit form passes the Activity's
+  # current effect so it renders pre-selected.
+  attr(:selected, :atom, required: true, values: [:positive, :negative])
+
+  def effect_switcher(assigns) do
+    ~H"""
+    <div class="flex gap-2">
+      <label class="flex-1">
+        <input
+          type="radio"
+          name="effect"
+          value="positive"
+          checked={@selected == :positive}
+          aria-label="Earns play time"
+          class="peer sr-only"
+        />
+        <span
+          title="Earns play time"
+          class="block text-center px-3 py-3 rounded-xl border-2 border-pink-300 text-pink-700 text-xl font-bold leading-none cursor-pointer select-none peer-checked:bg-green-500 peer-checked:border-green-500 peer-checked:text-white"
+        >
+          +
+        </span>
+      </label>
+      <label class="flex-1">
+        <input
+          type="radio"
+          name="effect"
+          value="negative"
+          checked={@selected == :negative}
+          aria-label="Drains play time"
+          class="peer sr-only"
+        />
+        <span
+          title="Drains play time"
+          class="block text-center px-3 py-3 rounded-xl border-2 border-pink-300 text-pink-700 text-xl font-bold leading-none cursor-pointer select-none peer-checked:bg-red-500 peer-checked:border-red-500 peer-checked:text-white"
+        >
+          −
+        </span>
+      </label>
+    </div>
+    """
+  end
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
@@ -30,6 +78,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> assign(:activities, nil)
       |> assign(:editing_activity_id, nil)
       |> assign(:editing_multiplier, nil)
+      |> assign(:pending_activity, nil)
 
     # The static (disconnected) render has no client to query Timing with, so
     # fetching would fail and silently score every Activity as 0 (per
@@ -101,7 +150,8 @@ defmodule TimingPlayTimeWeb.DashboardLive do
               put_flash(
                 socket,
                 :info,
-                "Logged #{minutes} play minutes!" <> receipt_message(receipt, socket.assigns.activities)
+                "Logged #{minutes} play minutes!" <>
+                  receipt_message(receipt, socket.assigns.activities)
               )
 
             {:noreply, socket}
@@ -197,32 +247,25 @@ defmodule TimingPlayTimeWeb.DashboardLive do
           "activity_id" => id,
           "name" => name,
           "time_source_identifier" => time_source_identifier
-        },
+        } = params,
         socket
       ) do
+    effect = parse_effect(Map.get(params, "effect", "positive"))
+
     attrs = %{
       name: name,
       time_source_identifier: time_source_identifier,
-      multiplier: socket.assigns.editing_multiplier
+      multiplier: socket.assigns.editing_multiplier,
+      effect: effect
     }
 
-    socket =
-      case ActivityManager.update_activity(socket.assigns.current_user.id, id, attrs) do
-        {:ok, _activity} ->
-          socket = socket |> assign(:editing_activity_id, nil) |> assign(:editing_multiplier, nil)
+    current = Enum.find(socket.assigns.activities || [], &(&1.id == id))
 
-          {activities, totals, raw_entries} =
-            fetch_activities_and_balance_fetchers(socket)
-
-          socket
-          |> load_activities(activities, totals, raw_entries)
-          |> put_flash(:info, "Updated activity #{name}!")
-
-        {:error, _reason} ->
-          put_flash(socket, :error, "Please fill in every field with valid values")
-      end
-
-    {:noreply, socket}
+    if becoming_draining?(current && current.effect, effect) do
+      {:noreply, stash_pending_activity(socket, :edit, id, attrs)}
+    else
+      persist_activity_update(socket, id, attrs)
+    end
   end
 
   @impl true
@@ -232,27 +275,45 @@ defmodule TimingPlayTimeWeb.DashboardLive do
           "name" => name,
           "time_source_identifier" => time_source_identifier,
           "multiplier" => multiplier_str
-        },
+        } = params,
         socket
       ) do
-    with {multiplier, _} <- Float.parse(multiplier_str),
-         {:ok, _activity} <-
-           ActivityManager.create_activity(socket.assigns.current_user.id, %{
-             name: name,
-             time_source_identifier: time_source_identifier,
-             multiplier: multiplier
-           }) do
-      {activities, totals, raw_entries} = fetch_activities_and_balance_fetchers(socket)
+    effect = parse_effect(Map.get(params, "effect", "positive"))
 
-      socket =
-        socket
-        |> load_activities(activities, totals, raw_entries)
-        |> put_flash(:info, "Added activity #{name}!")
+    case Float.parse(multiplier_str) do
+      {multiplier, _} ->
+        attrs = %{
+          name: name,
+          time_source_identifier: time_source_identifier,
+          multiplier: multiplier,
+          effect: effect
+        }
 
-      {:noreply, socket}
-    else
-      _ -> {:noreply, put_flash(socket, :error, "Please fill in every field with valid values")}
+        if becoming_draining?(nil, effect) do
+          {:noreply, stash_pending_activity(socket, :create, nil, attrs)}
+        else
+          persist_new_activity(socket, attrs)
+        end
+
+      :error ->
+        {:noreply, put_flash(socket, :error, "Please fill in every field with valid values")}
     end
+  end
+
+  @impl true
+  def handle_event("confirm_pending_activity", _params, socket) do
+    %{mode: mode, attrs: attrs, id: id} = socket.assigns.pending_activity
+    socket = assign(socket, :pending_activity, nil)
+
+    case mode do
+      :create -> persist_new_activity(socket, attrs)
+      :edit -> persist_activity_update(socket, id, attrs)
+    end
+  end
+
+  @impl true
+  def handle_event("cancel_pending_activity", _params, socket) do
+    {:noreply, assign(socket, :pending_activity, nil)}
   end
 
   @impl true
@@ -274,6 +335,76 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # (e.g. 1.1 + 0.1 - 0.1 landing on 1.0999999999999999).
   defp step_multiplier(multiplier, delta) do
     (multiplier + delta) |> max(0.0) |> Float.round(1)
+  end
+
+  # Never String.to_atom/1 on user input — only the two known strings map to
+  # atoms, anything else is treated as :positive (#10, ADR-0013).
+  defp parse_effect(effect) when effect in ["negative", :negative], do: :negative
+  defp parse_effect(_effect), do: :positive
+
+  # The Effect "crossing" that needs confirming: the result is a drain and
+  # the prior state was not (ADR-0013 — confirm the crossing, not every
+  # deepening). `prior` is nil on the add form.
+  defp becoming_draining?(prior, submitted), do: submitted == :negative and prior != :negative
+
+  # Stashes the write instead of performing it, alongside the retroactive
+  # Play Minutes hit the confirmation panel shows (<= 0). Computed once here
+  # from the already-loaded window entries — advisory only, the real figure
+  # comes from the next compute_today/4 read.
+  defp stash_pending_activity(socket, mode, id, attrs) do
+    {_activities, _totals, raw_entries} = fetch_activities_and_balance_fetchers(socket)
+
+    provisional = %{
+      time_source_identifier: attrs.time_source_identifier,
+      multiplier: attrs.multiplier,
+      effect: :negative
+    }
+
+    {:ok, %{play_minutes: projected}} =
+      PlayBalance.week_activity_minutes(provisional, DateTime.utc_now(), [], raw_entries)
+
+    assign(socket, :pending_activity, %{
+      mode: mode,
+      attrs: attrs,
+      id: id,
+      projected_play_minutes: projected
+    })
+  end
+
+  defp persist_new_activity(socket, attrs) do
+    case ActivityManager.create_activity(socket.assigns.current_user.id, attrs) do
+      {:ok, _activity} ->
+        {activities, totals, raw_entries} = fetch_activities_and_balance_fetchers(socket)
+
+        socket =
+          socket
+          |> load_activities(activities, totals, raw_entries)
+          |> put_flash(:info, "Added activity #{attrs.name}!")
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Please fill in every field with valid values")}
+    end
+  end
+
+  defp persist_activity_update(socket, id, attrs) do
+    case ActivityManager.update_activity(socket.assigns.current_user.id, id, attrs) do
+      {:ok, _activity} ->
+        socket = socket |> assign(:editing_activity_id, nil) |> assign(:editing_multiplier, nil)
+
+        {activities, totals, raw_entries} = fetch_activities_and_balance_fetchers(socket)
+
+        socket =
+          socket
+          |> load_activities(activities, totals, raw_entries)
+          |> put_flash(:info, "Updated activity #{attrs.name}!")
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Please fill in every field with valid values")}
+    end
   end
 
   defp balance_topic(user), do: "play_balance:#{user.id}"
@@ -408,7 +539,12 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     )
   end
 
-  @empty_activity_minutes %{minutes: 0.0, play_minutes: 0.0, week_minutes: 0.0, week_play_minutes: 0.0}
+  @empty_activity_minutes %{
+    minutes: 0.0,
+    play_minutes: 0.0,
+    week_minutes: 0.0,
+    week_play_minutes: 0.0
+  }
 
   # Briefly nil on a brand-new anonymous user, until the `.TimezoneDetector`
   # hook's first pushEvent lands (ADR-0006) — shows zero rather than
@@ -482,7 +618,9 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       end
 
     today_from = today_from(user, now)
-    totals = PlayBalance.get_totals(activities, [to: now, today_from: today_from] ++ time_source_opts)
+
+    totals =
+      PlayBalance.get_totals(activities, [to: now, today_from: today_from] ++ time_source_opts)
 
     # Bounded to the Entry Expiry Window (ADR-0012) — unlike `totals` above
     # (the debug-only, deliberately unbounded Play Balance/per-Activity

@@ -204,10 +204,11 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ ~s(href="/settings")
   end
 
-  test "shows the day-scoped Playtime hero, with the cumulative Play Balance hidden by default", %{
-    conn: conn,
-    user: user
-  } do
+  test "shows the day-scoped Playtime hero, with the cumulative Play Balance hidden by default",
+       %{
+         conn: conn,
+         user: user
+       } do
     {:ok, _activity} =
       PersistenceStub.create_activity(user.id, %{
         name: "Coding",
@@ -374,5 +375,283 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
     html = render_click(view, "hide_debug")
     refute html =~ "Your Play Balance"
+  end
+
+  describe "Effect toggle and sign-crossing confirmation (#15, ADR-0013)" do
+    test "the add form creates a :positive Activity by default, with no confirmation panel", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html =
+        view
+        |> form("form[phx-submit=create_activity]", %{
+          "name" => "Coding",
+          "time_source_identifier" => "coding-proj-1",
+          "multiplier" => "1.5"
+        })
+        |> render_submit()
+
+      assert html =~ "Added activity Coding!"
+      refute html =~ "Draining Activity?"
+
+      assert {:ok, [activity]} = PersistenceStub.list_activities(user.id)
+      assert activity.effect == :positive
+    end
+
+    test "add form with Effect = drains stashes the write and shows a confirmation panel", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html =
+        view
+        |> form("form[phx-submit=create_activity]", %{
+          "name" => "YouTube",
+          "time_source_identifier" => "video-proj",
+          "multiplier" => "2.0",
+          "effect" => "negative"
+        })
+        |> render_submit()
+
+      assert html =~ "Draining Activity?"
+      assert html =~ "YouTube"
+      assert {:ok, []} = PersistenceStub.list_activities(user.id)
+    end
+
+    test "Confirm on the add-form panel creates the Activity with effect: :negative and flashes",
+         %{
+           conn: conn,
+           user: user
+         } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view
+      |> form("form[phx-submit=create_activity]", %{
+        "name" => "YouTube",
+        "time_source_identifier" => "video-proj",
+        "multiplier" => "2.0",
+        "effect" => "negative"
+      })
+      |> render_submit()
+
+      html = render_click(view, "confirm_pending_activity")
+
+      assert html =~ "Added activity YouTube!"
+      refute html =~ "Draining Activity?"
+
+      assert {:ok, [activity]} = PersistenceStub.list_activities(user.id)
+      assert activity.effect == :negative
+    end
+
+    test "Cancel on the add-form panel creates nothing and dismisses the panel", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view
+      |> form("form[phx-submit=create_activity]", %{
+        "name" => "YouTube",
+        "time_source_identifier" => "video-proj",
+        "multiplier" => "2.0",
+        "effect" => "negative"
+      })
+      |> render_submit()
+
+      html = render_click(view, "cancel_pending_activity")
+
+      refute html =~ "Draining Activity?"
+      assert {:ok, []} = PersistenceStub.list_activities(user.id)
+    end
+
+    test "the confirmation panel says nothing is deducted when the project has no tracked time",
+         %{
+           conn: conn
+         } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html =
+        view
+        |> form("form[phx-submit=create_activity]", %{
+          "name" => "YouTube",
+          "time_source_identifier" => "brand-new-proj",
+          "multiplier" => "2.0",
+          "effect" => "negative"
+        })
+        |> render_submit()
+
+      assert html =~ "Draining Activity?"
+      assert html =~ "nothing is deducted right now"
+    end
+
+    test "a malformed effect param on the add form is treated as :positive", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html =
+        view
+        |> element("form[phx-submit=create_activity]")
+        |> render_submit(%{
+          "name" => "Coding",
+          "time_source_identifier" => "coding-proj-1",
+          "multiplier" => "1.0",
+          "effect" => "bogus"
+        })
+
+      assert html =~ "Added activity Coding!"
+      assert {:ok, [activity]} = PersistenceStub.list_activities(user.id)
+      assert activity.effect == :positive
+    end
+
+    test "the inline edit form shows the Effect control pre-set to the Activity's current effect",
+         %{conn: conn, user: user} do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "video-proj",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: DateTime.utc_now()
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html = render_click(view, "edit_activity", %{"id" => activity.id})
+
+      assert html =~ ~r/value="negative"[^>]*checked/
+    end
+
+    test "editing a positive Activity to drains shows the panel with the projected hit; Confirm persists",
+         %{conn: conn, user: user} do
+      # activated_at today + an unmapped project id => the stub emits exactly
+      # one 20-min entry inside the window, so the projected hit is a known
+      # 20.0 * 1.0 = 20.0 min (story 9).
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "video-proj",
+          multiplier: 1.0,
+          activated_at: DateTime.utc_now()
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_click(view, "edit_activity", %{"id" => activity.id})
+
+      html =
+        view
+        |> form("form[phx-submit=save_activity]", %{
+          "name" => "Coding",
+          "time_source_identifier" => "video-proj",
+          "effect" => "negative"
+        })
+        |> render_submit()
+
+      assert html =~ "Draining Activity?"
+
+      assert html =~
+               ~r{subtract\s*<span[^>]*>20\.0</span>\s*<span[^>]*>min</span>\s*of play time already earned this week}
+
+      assert {:ok, %{effect: :positive}} = PersistenceStub.get_activity(user.id, activity.id)
+
+      html = render_click(view, "confirm_pending_activity")
+
+      assert html =~ "Updated activity Coding!"
+      assert {:ok, %{effect: :negative}} = PersistenceStub.get_activity(user.id, activity.id)
+    end
+
+    test "Cancel on the edit-form panel leaves the Activity :positive", %{conn: conn, user: user} do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_click(view, "edit_activity", %{"id" => activity.id})
+
+      view
+      |> form("form[phx-submit=save_activity]", %{
+        "name" => "Coding",
+        "time_source_identifier" => "coding-proj-1",
+        "effect" => "negative"
+      })
+      |> render_submit()
+
+      html = render_click(view, "cancel_pending_activity")
+
+      refute html =~ "Draining Activity?"
+      assert {:ok, %{effect: :positive}} = PersistenceStub.get_activity(user.id, activity.id)
+    end
+
+    test "editing an already-draining Activity's multiplier saves immediately with no panel", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "video-proj",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: DateTime.utc_now()
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_click(view, "edit_activity", %{"id" => activity.id})
+      render_click(view, "increment_multiplier", %{})
+
+      html =
+        view
+        |> form("form[phx-submit=save_activity]", %{
+          "name" => "YouTube",
+          "time_source_identifier" => "video-proj",
+          "effect" => "negative"
+        })
+        |> render_submit()
+
+      refute html =~ "Draining Activity?"
+      assert html =~ "Updated activity YouTube!"
+
+      assert {:ok, saved} = PersistenceStub.get_activity(user.id, activity.id)
+      assert saved.effect == :negative
+      assert saved.multiplier == 2.1
+    end
+
+    test "editing a draining Activity back to earns saves immediately with no panel", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "video-proj",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: DateTime.utc_now()
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_click(view, "edit_activity", %{"id" => activity.id})
+
+      html =
+        view
+        |> form("form[phx-submit=save_activity]", %{
+          "name" => "YouTube",
+          "time_source_identifier" => "video-proj",
+          "effect" => "positive"
+        })
+        |> render_submit()
+
+      refute html =~ "Draining Activity?"
+      assert html =~ "Updated activity YouTube!"
+      assert {:ok, %{effect: :positive}} = PersistenceStub.get_activity(user.id, activity.id)
+    end
   end
 end
