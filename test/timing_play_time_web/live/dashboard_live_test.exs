@@ -528,12 +528,15 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
     test "editing a positive Activity to drains shows the panel with the projected hit; Confirm persists",
          %{conn: conn, user: user} do
+      # activated_at today + an unmapped project id => the stub emits exactly
+      # one 20-min entry inside the window, so the projected hit is a known
+      # 20.0 * 1.0 = 20.0 min (story 9).
       {:ok, activity} =
         PersistenceStub.create_activity(user.id, %{
           name: "Coding",
-          time_source_identifier: "coding-proj-1",
+          time_source_identifier: "video-proj",
           multiplier: 1.0,
-          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+          activated_at: DateTime.utc_now()
         })
 
       {:ok, view, _html} = live(conn, ~p"/")
@@ -543,13 +546,13 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
         view
         |> form("form[phx-submit=save_activity]", %{
           "name" => "Coding",
-          "time_source_identifier" => "coding-proj-1",
+          "time_source_identifier" => "video-proj",
           "effect" => "negative"
         })
         |> render_submit()
 
       assert html =~ "Draining Activity?"
-      assert html =~ "already earned this week"
+      assert html =~ ~r{subtract\s*<span[^>]*>20\.0</span>\s*<span[^>]*>min</span>\s*of play time already earned this week}
       assert {:ok, %{effect: :positive}} = PersistenceStub.get_activity(user.id, activity.id)
 
       html = render_click(view, "confirm_pending_activity")
