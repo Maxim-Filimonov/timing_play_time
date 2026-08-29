@@ -9,13 +9,9 @@ kill_signal = 'SIGTERM'
 
 [build]
 
-[deploy]
-  # Runs Ecto.Migrator (TimingPlayTime.Release.migrate) on a temporary
-  # machine before the new release rolls out — replaces the manual
-  # `rel/overlays/bin/migrate` step. The machine mounts the same
-  # `timing_play_time_data` volume, so the SQLite DB at DATABASE_PATH is
-  # the one that gets migrated. A failed migration aborts the deploy.
-  release_command = "/app/bin/migrate"
+# Migrations run on the app machine at boot (see rel/overlays/bin/server),
+# not via a [deploy] release_command — the release machine doesn't mount
+# the data volume, so it can't reach the SQLite DB.
 
 [env]
   DATABASE_PATH = '/data/timing_play_time.db'
