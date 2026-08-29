@@ -2,4 +2,14 @@
 set -eu
 
 cd -P -- "$(dirname -- "$0")"
+
+# Migrate on boot rather than via a Fly `release_command`: the release
+# machine doesn't mount the `timing_play_time_data` volume, so it can't
+# reach the SQLite DB at DATABASE_PATH (it fails with EACCES against the
+# image's bare /data). The app machine has the volume, and runs as the
+# same `nobody` user that already writes the DB while serving. `set -e`
+# aborts the boot if a migration fails, so a schema-mismatched release
+# never starts serving.
+./timing_play_time eval TimingPlayTime.Release.migrate
+
 PHX_SERVER=true exec ./timing_play_time start
