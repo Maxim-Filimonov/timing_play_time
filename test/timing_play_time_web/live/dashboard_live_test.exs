@@ -128,6 +128,149 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ "This week:"
   end
 
+  describe "Activity card Effect treatment (#16)" do
+    test "an earner card shows a teal left rail and a +N× teal chip, band-indexed", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      # multiplier 1.0 -> band 1 -> teal-500
+      assert html =~ "border-l-teal-500"
+      assert html =~ "bg-teal-500"
+      assert html =~ "+1.0×"
+      refute html =~ "Multiplier:"
+    end
+
+    test "a drain card shows a red left rail, a −N× red chip, and a negative red weekly figure", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "youtube-proj-1",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      # multiplier 2.0 -> band 2 -> red-500
+      assert html =~ "border-l-red-500"
+      assert html =~ "bg-red-500"
+      assert html =~ "−2.0×"
+      # a drain's weekly/today play figures render negative and red
+      assert html =~ ~r/−<span class="font-semibold text-red-700"/
+    end
+  end
+
+  describe "weekly distribution chart (#16)" do
+    test "a User with tracked time but no drain Activity sees a plain upward column chart", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -10, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ "This week by day"
+      assert html =~ ~s(data-chart="upward")
+      refute html =~ ~s(data-chart="diverging")
+    end
+
+    test "a User with a drain Activity configured sees the diverging form", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _earner} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -10, :day)
+        })
+
+      {:ok, _drain} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "youtube-proj-1",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: DateTime.add(DateTime.utc_now(), -10, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ ~s(data-chart="diverging")
+      refute html =~ ~s(data-chart="upward")
+    end
+
+    test "a drains-only week still renders the diverging chart with visible red columns", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _drain} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "youtube-proj-1",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: DateTime.add(DateTime.utc_now(), -10, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ ~s(data-chart="diverging")
+      assert html =~ "bg-red-500"
+      # drain arm scaled off drain_max, not a zero earn_max -> non-zero height
+      refute html =~ ~r/rounded-b overflow-hidden" style="height: 0(\.0)?px/
+    end
+
+    test "a User with no tracked time at all sees no chart card", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      refute html =~ "This week by day"
+    end
+
+    test "the legend lists each contributing Activity with its signed multiplier", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.5,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -10, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ ~s(data-role="effect-legend")
+      assert html =~ "+1.5×"
+    end
+  end
+
   test "does not show another user's Activities", %{conn: conn, user: user} do
     {:ok, other_user} = Accounts.create_user()
 
@@ -247,6 +390,12 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     # The reconciliation line and the "This Week" block now carry a Drained
     # term (reads 0 for this no-drain fixture) — ADR-0013.
     assert html =~ "Drained"
+
+    # "red means drain" (#16): Drained keeps red, Used moves to amber so
+    # spending no longer reads as an error/drain.
+    assert html =~ ~r/Drained<\/span>\s*<span class="font-bold text-red-300"/
+    assert html =~ ~r/Used<\/span>\s*<span class="font-bold text-amber-300"/
+    assert html =~ ~r/Used Today<\/span>\s*<span class="font-bold text-amber-300"/
   end
 
   test "clicking Edit on an Activity shows an inline form pre-filled with its current values", %{

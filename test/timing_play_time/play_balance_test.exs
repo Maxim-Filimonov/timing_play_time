@@ -328,6 +328,194 @@ defmodule TimingPlayTime.PlayBalanceTest do
     end
   end
 
+  describe "week_distribution/4" do
+    # UTC+12, so `now` at 10:00Z is 22:00 local on the same date — the
+    # 7-column window is the 7 local calendar days ending on that date.
+    @tz "Pacific/Auckland"
+    @now ~U[2026-07-25 10:00:00Z]
+
+    defp earner(user, identifier, multiplier) do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: identifier,
+          time_source_identifier: identifier,
+          multiplier: multiplier,
+          effect: :positive,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      activity
+    end
+
+    defp drainer(user, identifier, multiplier) do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: identifier,
+          time_source_identifier: identifier,
+          multiplier: multiplier,
+          effect: :negative,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      activity
+    end
+
+    test "returns exactly 7 days, oldest -> newest, with empty arrays when there is no tracked time",
+         %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], %{})
+
+      assert length(dist.days) == 7
+
+      assert Enum.map(dist.days, & &1.date) == [
+               ~D[2026-07-19],
+               ~D[2026-07-20],
+               ~D[2026-07-21],
+               ~D[2026-07-22],
+               ~D[2026-07-23],
+               ~D[2026-07-24],
+               ~D[2026-07-25]
+             ]
+
+      assert Enum.all?(dist.days, &(&1.earn == [] and &1.drain == []))
+      assert Enum.all?(dist.days, &(&1.earn_total == 0.0 and &1.drain_total == 0.0))
+      assert dist.any_data == false
+      assert dist.has_drains == false
+      assert dist.earn_max == 0.0
+      assert dist.drain_max == 0.0
+    end
+
+    test "buckets an earner's entries by local calendar day, descending by magnitude, with gap days empty",
+         %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      activity = earner(user, "coding-proj-1", 2.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(@now, -3, :day), minutes: 30.0},
+          %{start_date: DateTime.add(@now, -1, :day), minutes: 10.0}
+        ]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      by_date = Map.new(dist.days, &{&1.date, &1})
+
+      # now - 3 days -> 2026-07-22 (local); now - 1 day -> 2026-07-24
+      assert [%{activity_id: id, name: "coding-proj-1", play_minutes: 60.0, band: 2}] =
+               by_date[~D[2026-07-22]].earn
+
+      assert id == activity.id
+      assert by_date[~D[2026-07-22]].earn_total == 60.0
+      assert by_date[~D[2026-07-24]].earn_total == 20.0
+      assert by_date[~D[2026-07-23]].earn == []
+      assert dist.earn_max == 60.0
+      assert dist.any_data == true
+      assert dist.has_drains == false
+    end
+
+    test "a drain segment's play_minutes is the unsigned magnitude and lands in :drain", %{
+      user: user
+    } do
+      user = Map.put(user, :timezone, @tz)
+      drainer(user, "youtube-proj-1", 2.0)
+
+      raw_entries = %{
+        "youtube-proj-1" => [%{start_date: DateTime.add(@now, -1, :day), minutes: 30.0}]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      by_date = Map.new(dist.days, &{&1.date, &1})
+
+      assert [%{name: "youtube-proj-1", play_minutes: 60.0, band: 2}] = by_date[~D[2026-07-24]].drain
+      assert by_date[~D[2026-07-24]].drain_total == 60.0
+      assert by_date[~D[2026-07-24]].earn == []
+      assert dist.drain_max == 60.0
+      assert dist.has_drains == true
+    end
+
+    test "has_drains reflects a configured Draining Activity even with no drain minutes this week",
+         %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+      drainer(user, "youtube-proj-1", 2.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: DateTime.add(@now, -1, :day), minutes: 10.0}]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      assert dist.has_drains == true
+      assert dist.drain_max == 0.0
+      assert dist.any_data == true
+    end
+
+    test "any_data is false when no entry falls in the window, even with Activities configured", %{
+      user: user
+    } do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+
+      raw_entries = %{
+        # 8 days old -> outside the 7 local-day window
+        "coding-proj-1" => [%{start_date: DateTime.add(@now, -8, :day), minutes: 10.0}]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      assert dist.any_data == false
+      assert dist.earn_max == 0.0
+    end
+
+    test "band/1 boundaries: 0.9->1, 1.0->1, 1.1->2, 2.0->2, 2.9->3, 3.0->4, 12->4", %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+
+      multipliers = [0.9, 1.0, 1.1, 2.0, 2.9, 3.0, 12.0]
+
+      raw_entries =
+        Map.new(multipliers, fn m ->
+          id = "m#{m}"
+          earner(user, id, m)
+          {id, [%{start_date: DateTime.add(@now, -1, :day), minutes: 10.0}]}
+        end)
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      by_date = Map.new(dist.days, &{&1.date, &1})
+      bands = Map.new(by_date[~D[2026-07-24]].earn, &{&1.name, &1.band})
+
+      assert bands == %{
+               "m0.9" => 1,
+               "m1.0" => 1,
+               "m1.1" => 2,
+               "m2.0" => 2,
+               "m2.9" => 3,
+               "m3.0" => 4,
+               "m12.0" => 4
+             }
+    end
+
+    test "sums multiple entries of the same Activity within a day into one segment", %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(@now, -1, :day), minutes: 10.0},
+          %{start_date: DateTime.add(@now, -1, :day), minutes: 5.0}
+        ]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+      by_date = Map.new(dist.days, &{&1.date, &1})
+
+      assert [%{play_minutes: 15.0}] = by_date[~D[2026-07-24]].earn
+    end
+  end
+
   describe "log_spend/4 (ADR-0012's persisted write path)" do
     test "persists consumption against the entries it draws from, so a later read reflects it even after the usage itself ages past the window (the original bug)",
          %{user: user} do

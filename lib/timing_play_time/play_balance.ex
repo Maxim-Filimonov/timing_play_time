@@ -169,6 +169,114 @@ defmodule TimingPlayTime.PlayBalance do
     {:ok, %{minutes: minutes, play_minutes: play_minutes(activity, minutes)}}
   end
 
+  @type band :: 1 | 2 | 3 | 4
+
+  @type dist_segment :: %{
+          activity_id: term(),
+          name: String.t(),
+          play_minutes: float(),
+          band: band()
+        }
+
+  @type dist_day :: %{
+          date: Date.t(),
+          earn: [dist_segment()],
+          drain: [dist_segment()],
+          earn_total: float(),
+          drain_total: float()
+        }
+
+  @doc """
+  The weekly distribution chart's data (#16): the 7 local calendar days
+  ending on `now`'s local day (ADR-0005, `user.timezone`), each split into
+  descending-by-magnitude per-Activity `earn` and `drain` segments.
+
+  Computed here rather than in the LiveView so the day bucketing and the
+  Effect banding (`band/1`, matching the #11 prototype's `step/1`) are
+  unit-testable. Reuses `compute_today/4`'s pipeline pieces —
+  `EntryLedger.load/4` (or a passed `raw_entries`, already window-bounded)
+  and `EntryLedger.build_entries/2`, which carries an entry's `effect` and
+  its unsigned magnitude.
+
+    * `has_drains` is keyed off *configured* Draining Activities, not this
+      week's minutes, so the chart's form is stable per User (#12 Q1).
+    * `any_data` is whether any tracked minutes at all landed in the 7-day
+      window — the LiveView hides the whole card when it's false (#12 Q5).
+    * `earn_max` / `drain_max` set the chart's linear scale.
+
+  ## Examples
+
+      iex> PlayBalance.week_distribution(user, ~U[2026-07-25 10:00:00Z])
+      {:ok, %{days: [_ | _], has_drains: false, any_data: true,
+              earn_max: 60.0, drain_max: 0.0}}
+  """
+  @spec week_distribution(map(), DateTime.t(), keyword(), map() | nil) ::
+          {:ok,
+           %{
+             days: [dist_day()],
+             has_drains: boolean(),
+             any_data: boolean(),
+             earn_max: float(),
+             drain_max: float()
+           }}
+          | {:error, term()}
+  def week_distribution(
+        user,
+        now \\ DateTime.utc_now(),
+        time_source_opts \\ [],
+        raw_entries \\ nil
+      ) do
+    window_start = expiry_window_start(now)
+
+    with {:ok, activities} <- @persistence.list_activities(user.id) do
+      raw_entries =
+        raw_entries || EntryLedger.load(activities, now, [from: window_start] ++ time_source_opts)
+
+      activities_by_id = Map.new(activities, &{&1.id, &1})
+      dates = window_dates(user.timezone, now)
+      date_set = MapSet.new(dates)
+
+      by_date =
+        activities
+        |> EntryLedger.build_entries(raw_entries)
+        |> Enum.group_by(&LocalDay.to_date(user.timezone, &1.start_date))
+        |> Map.filter(fn {date, _entries} -> MapSet.member?(date_set, date) end)
+
+      days = Enum.map(dates, &dist_day(&1, Map.get(by_date, &1, []), activities_by_id))
+
+      {:ok,
+       %{
+         days: days,
+         has_drains: Enum.any?(activities, &(&1.effect == :negative)),
+         any_data: Enum.any?(days, &(&1.earn != [] or &1.drain != [])),
+         earn_max: days |> Enum.map(& &1.earn_total) |> Enum.max(),
+         drain_max: days |> Enum.map(& &1.drain_total) |> Enum.max()
+       }}
+    end
+  end
+
+  @doc """
+  The fixed 4-band ramp (#11's `step/1`), anchored at |3x| and clamped —
+  keys off the Activity's stored unsigned Multiplier; `effect` picks the
+  teal-vs-red ramp on the web side (`TimingPlayTimeWeb.EffectColors`).
+
+      |multiplier| <= 1        -> 1
+      |multiplier| in (1, 2]   -> 2
+      |multiplier| in (2, 3)   -> 3
+      |multiplier| >= 3        -> 4
+  """
+  @spec band(number()) :: band()
+  def band(multiplier) do
+    m = abs(multiplier)
+
+    cond do
+      m <= 1 -> 1
+      m <= 2 -> 2
+      m < 3 -> 3
+      true -> 4
+    end
+  end
+
   @doc """
   Computes the dashboard's "Playtime" figure: Today's PT (today's earned
   Play Minutes, net of the Entry Consumption Ledger's draw-down — resets
@@ -426,6 +534,45 @@ defmodule TimingPlayTime.PlayBalance do
     do: apply_effect(minutes * activity.multiplier, activity.effect)
 
   defp positive?(%{effect: effect}), do: effect == :positive
+
+  # The 7 local calendar days ending on `now`'s local day, oldest -> newest.
+  defp window_dates(timezone, now) do
+    today = LocalDay.to_date(timezone, now)
+    Enum.map(6..0//-1, &Date.add(today, -&1))
+  end
+
+  defp dist_day(date, entries, activities_by_id) do
+    {earn, drain} = Enum.split_with(entries, &positive?/1)
+    earn = dist_segments(earn, activities_by_id)
+    drain = dist_segments(drain, activities_by_id)
+
+    %{
+      date: date,
+      earn: earn,
+      drain: drain,
+      earn_total: Enum.reduce(earn, 0.0, &(&1.play_minutes + &2)),
+      drain_total: Enum.reduce(drain, 0.0, &(&1.play_minutes + &2))
+    }
+  end
+
+  # One segment per Activity that contributed to this arm of this day, its
+  # unsigned magnitude summed (the chart carries sign by which arm it's
+  # in), descending by magnitude.
+  defp dist_segments(entries, activities_by_id) do
+    entries
+    |> Enum.group_by(& &1.activity_id)
+    |> Enum.map(fn {activity_id, activity_entries} ->
+      activity = Map.fetch!(activities_by_id, activity_id)
+
+      %{
+        activity_id: activity_id,
+        name: activity.name,
+        play_minutes: Enum.reduce(activity_entries, 0.0, &(&1.play_minutes + &2)),
+        band: band(activity.multiplier)
+      }
+    end)
+    |> Enum.sort_by(& &1.play_minutes, :desc)
+  end
 
   defp minutes_for(totals, activity, key) do
     case Map.fetch(totals, activity.time_source_identifier) do
