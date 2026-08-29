@@ -364,6 +364,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
     assert html =~ "Playtime"
     assert html =~ "Earned Today"
+    assert html =~ "Drained Today"
     assert html =~ "Used Today"
     assert html =~ "Pushscroll Balance"
     assert html =~ "Reserve"
@@ -394,6 +395,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     # "red means drain" (#16): Drained keeps red, Used moves to amber so
     # spending no longer reads as an error/drain.
     assert html =~ ~r/Drained<\/span>\s*<span class="font-bold text-red-300"/
+    assert html =~ ~r/Drained Today<\/span>\s*<span class="font-bold text-red-300"/
     assert html =~ ~r/Used<\/span>\s*<span class="font-bold text-amber-300"/
     assert html =~ ~r/Used Today<\/span>\s*<span class="font-bold text-amber-300"/
   end
