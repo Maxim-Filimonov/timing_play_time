@@ -16,6 +16,54 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # closes, which is fine since nobody's looking at it then.
   @refresh_interval_ms :timer.seconds(60)
 
+  # A no-JS +/- toggle for an Activity's Effect: two radio buttons styled as
+  # pills, submitting as the `effect` form field ("positive"/"negative").
+  # Replaces a <select> that rendered near-illegibly in the pink form. The
+  # selected side fills in (green for +, red for −); the meaning is spelled
+  # out in the tooltip and screen-reader label rather than inline text.
+  # Shared by the add and edit forms; the edit form passes the Activity's
+  # current effect so it renders pre-selected.
+  attr(:selected, :atom, required: true, values: [:positive, :negative])
+
+  def effect_switcher(assigns) do
+    ~H"""
+    <div class="flex gap-2">
+      <label class="flex-1">
+        <input
+          type="radio"
+          name="effect"
+          value="positive"
+          checked={@selected == :positive}
+          aria-label="Earns play time"
+          class="peer sr-only"
+        />
+        <span
+          title="Earns play time"
+          class="block text-center px-3 py-3 rounded-xl border-2 border-pink-300 text-pink-700 text-xl font-bold leading-none cursor-pointer select-none peer-checked:bg-green-500 peer-checked:border-green-500 peer-checked:text-white"
+        >
+          +
+        </span>
+      </label>
+      <label class="flex-1">
+        <input
+          type="radio"
+          name="effect"
+          value="negative"
+          checked={@selected == :negative}
+          aria-label="Drains play time"
+          class="peer sr-only"
+        />
+        <span
+          title="Drains play time"
+          class="block text-center px-3 py-3 rounded-xl border-2 border-pink-300 text-pink-700 text-xl font-bold leading-none cursor-pointer select-none peer-checked:bg-red-500 peer-checked:border-red-500 peer-checked:text-white"
+        >
+          −
+        </span>
+      </label>
+    </div>
+    """
+  end
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user

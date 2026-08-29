@@ -523,7 +523,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
       html = render_click(view, "edit_activity", %{"id" => activity.id})
 
-      assert html =~ ~r/<option value="negative"[^>]*selected/
+      assert html =~ ~r/value="negative"[^>]*checked/
     end
 
     test "editing a positive Activity to drains shows the panel with the projected hit; Confirm persists",
@@ -552,7 +552,10 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
         |> render_submit()
 
       assert html =~ "Draining Activity?"
-      assert html =~ ~r{subtract\s*<span[^>]*>20\.0</span>\s*<span[^>]*>min</span>\s*of play time already earned this week}
+
+      assert html =~
+               ~r{subtract\s*<span[^>]*>20\.0</span>\s*<span[^>]*>min</span>\s*of play time already earned this week}
+
       assert {:ok, %{effect: :positive}} = PersistenceStub.get_activity(user.id, activity.id)
 
       html = render_click(view, "confirm_pending_activity")
