@@ -109,7 +109,6 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert {:ok, balance} = PlayBalance.compute(user)
       assert balance.total == 0.0
     end
-
   end
 
   describe "get_totals/3" do
@@ -136,7 +135,11 @@ defmodule TimingPlayTime.PlayBalanceTest do
     test "returns an empty map (rather than erroring) when the fetcher fails" do
       get_elapsed_minutes = fn _activities, _opts -> {:error, :boom} end
 
-      assert PlayBalance.get_totals([%{time_source_identifier: "coding-proj-1"}], [], get_elapsed_minutes) ==
+      assert PlayBalance.get_totals(
+               [%{time_source_identifier: "coding-proj-1"}],
+               [],
+               get_elapsed_minutes
+             ) ==
                %{}
     end
   end
@@ -217,7 +220,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
   end
 
   describe "week_activity_minutes/3" do
-    test "sums an activity's entries within the last 7 days, applying its multiplier", %{user: user} do
+    test "sums an activity's entries within the last 7 days, applying its multiplier", %{
+      user: user
+    } do
       now = ~U[2026-07-25 10:00:00Z]
 
       {:ok, activity} =
@@ -239,9 +244,10 @@ defmodule TimingPlayTime.PlayBalanceTest do
                PlayBalance.week_activity_minutes(activity, now, [], raw_entries)
     end
 
-    test "excludes an entry more than 7 days old (the exact rolling Entry Expiry Window cutoff)", %{
-      user: user
-    } do
+    test "excludes an entry more than 7 days old (the exact rolling Entry Expiry Window cutoff)",
+         %{
+           user: user
+         } do
       now = ~U[2026-07-25 10:00:00Z]
 
       {:ok, activity} =
@@ -277,6 +283,28 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert minutes == 0.0
       assert play_minutes == 0.0
+    end
+
+    test "accepts a provisional Activity map with no :id and returns the expected signed play_minutes" do
+      # The confirmation panel in #15 calls this with a map that does not
+      # exist in the DB yet, to preview the retroactive drain hit.
+      now = ~U[2026-07-25 10:00:00Z]
+
+      provisional = %{
+        time_source_identifier: "youtube-proj-1",
+        multiplier: 2.0,
+        effect: :negative
+      }
+
+      raw_entries = %{
+        "youtube-proj-1" => [
+          %{start_date: DateTime.add(now, -3, :day), minutes: 30.0},
+          %{start_date: DateTime.add(now, -1, :day), minutes: 10.0}
+        ]
+      }
+
+      assert {:ok, %{minutes: 40.0, play_minutes: -80.0}} =
+               PlayBalance.week_activity_minutes(provisional, now, [], raw_entries)
     end
 
     test "a Draining Activity's weekly play_minutes is negative (ADR-0013)", %{user: user} do
@@ -411,7 +439,11 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # on, however large the spend.
       raw_entries = %{
         "coding-proj-1" => [
-          %{start_date: DateTime.add(now, -30, :day), minutes: 10_000.0, time_entry_id: "ancient"},
+          %{
+            start_date: DateTime.add(now, -30, :day),
+            minutes: 10_000.0,
+            time_entry_id: "ancient"
+          },
           %{start_date: DateTime.add(now, -1, :day), minutes: 10.0, time_entry_id: "recent"}
         ]
       }
@@ -529,7 +561,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
       # to eyeball against `earned_today`/`used_today` — week_earned/
       # week_used sidesteps it entirely.
       raw_entries = %{
-        "coding-proj-1" => [%{start_date: ~U[2026-07-25 09:00:00Z], minutes: 30.0, time_entry_id: "e1"}]
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 09:00:00Z], minutes: 30.0, time_entry_id: "e1"}
+        ]
       }
 
       assert {:ok, %{deficit: 50.0}} =
@@ -547,8 +581,8 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.reserve == -45.0
 
       assert_in_delta today.playtime,
-                       today.week_earned - today.week_used + today.pushscroll_balance,
-                       0.0001
+                      today.week_earned - today.week_used + today.pushscroll_balance,
+                      0.0001
     end
 
     test "the identity holds when overflow drains reserve across several activities and days", %{
@@ -592,8 +626,8 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert_in_delta today.playtime,
-                       today.week_earned - today.week_used + today.pushscroll_balance,
-                       0.0001
+                      today.week_earned - today.week_used + today.pushscroll_balance,
+                      0.0001
     end
   end
 
@@ -622,8 +656,12 @@ defmodule TimingPlayTime.PlayBalanceTest do
     test "week_drained/drained_today carry the gross drain magnitude; week_earned stays gross",
          %{user: user, now: now} do
       raw_entries = %{
-        "coding-proj-1" => [%{start_date: ~U[2026-07-25 01:00:00Z], minutes: 40.0, time_entry_id: "c1"}],
-        "youtube-proj-1" => [%{start_date: ~U[2026-07-25 02:00:00Z], minutes: 10.0, time_entry_id: "y1"}]
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 40.0, time_entry_id: "c1"}
+        ],
+        "youtube-proj-1" => [
+          %{start_date: ~U[2026-07-25 02:00:00Z], minutes: 10.0, time_entry_id: "y1"}
+        ]
       }
 
       assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
@@ -642,8 +680,12 @@ defmodule TimingPlayTime.PlayBalanceTest do
     test "a day whose drains exceed its earnings floors today_net at 0 and spills the excess into reserve",
          %{user: user, now: now} do
       raw_entries = %{
-        "coding-proj-1" => [%{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: "c1"}],
-        "youtube-proj-1" => [%{start_date: ~U[2026-07-25 02:00:00Z], minutes: 30.0, time_entry_id: "y1"}]
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: "c1"}
+        ],
+        "youtube-proj-1" => [
+          %{start_date: ~U[2026-07-25 02:00:00Z], minutes: 30.0, time_entry_id: "y1"}
+        ]
       }
 
       assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
@@ -658,8 +700,12 @@ defmodule TimingPlayTime.PlayBalanceTest do
     test "a logged spend never draws from a drain entry — no EntryConsumption row references it",
          %{user: user, now: now, coding: coding, youtube: youtube} do
       raw_entries = %{
-        "coding-proj-1" => [%{start_date: ~U[2026-07-25 01:00:00Z], minutes: 20.0, time_entry_id: "c1"}],
-        "youtube-proj-1" => [%{start_date: ~U[2026-07-25 02:00:00Z], minutes: 100.0, time_entry_id: "y1"}]
+        "coding-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 20.0, time_entry_id: "c1"}
+        ],
+        "youtube-proj-1" => [
+          %{start_date: ~U[2026-07-25 02:00:00Z], minutes: 100.0, time_entry_id: "y1"}
+        ]
       }
 
       # The spend can only reach coding's 20 min; the rest is deficit — the
@@ -707,9 +753,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
 
       assert_in_delta today.playtime,
-                       today.week_earned - today.week_drained - today.week_used +
-                         today.pushscroll_balance,
-                       0.0001
+                      today.week_earned - today.week_drained - today.week_used +
+                        today.pushscroll_balance,
+                      0.0001
     end
   end
 
@@ -736,8 +782,11 @@ defmodule TimingPlayTime.PlayBalanceTest do
       }
 
       # Local start of today is 2026-07-24T12:00:00Z.
-      assert {:ok, _} = PlayBalance.log_spend(user, 30.0, ~U[2026-07-23 09:00:00Z], [], raw_entries)
-      assert {:ok, _} = PlayBalance.log_spend(user, 15.0, ~U[2026-07-25 05:00:00Z], [], raw_entries)
+      assert {:ok, _} =
+               PlayBalance.log_spend(user, 30.0, ~U[2026-07-23 09:00:00Z], [], raw_entries)
+
+      assert {:ok, _} =
+               PlayBalance.log_spend(user, 15.0, ~U[2026-07-25 05:00:00Z], [], raw_entries)
 
       now = ~U[2026-07-25 10:00:00Z]
 
@@ -808,7 +857,9 @@ defmodule TimingPlayTime.PlayBalanceTest do
       assert today.playtime == -50.0
     end
 
-    test "excludes an entry more than 7 days old from Reserve (Entry Expiry Window)", %{user: user} do
+    test "excludes an entry more than 7 days old from Reserve (Entry Expiry Window)", %{
+      user: user
+    } do
       now = ~U[2026-07-25 10:00:00Z]
 
       # Exactly on the boundary: 7 days and 1 minute before `now`, so just
