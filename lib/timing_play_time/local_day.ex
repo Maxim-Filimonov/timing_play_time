@@ -9,10 +9,17 @@ defmodule TimingPlayTime.LocalDay do
   UTC instant, in the given IANA timezone name.
   """
   def start_of_today(timezone, now \\ DateTime.utc_now()) do
-    local_date = now |> DateTime.shift_zone!(timezone) |> DateTime.to_date()
-
-    local_date
+    timezone
+    |> to_date(now)
     |> DateTime.new!(~T[00:00:00], timezone)
     |> DateTime.shift_zone!("Etc/UTC")
+  end
+
+  @doc """
+  Returns the local calendar date (in the given IANA timezone) that the
+  given UTC instant falls on.
+  """
+  def to_date(timezone, instant) do
+    instant |> DateTime.shift_zone!(timezone) |> DateTime.to_date()
   end
 end

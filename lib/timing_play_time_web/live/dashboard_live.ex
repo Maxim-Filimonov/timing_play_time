@@ -8,6 +8,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   alias TimingPlayTime.ManualSync
   alias TimingPlayTime.Accounts
   alias TimingPlayTime.LocalDay
+  alias TimingPlayTimeWeb.EffectColors
 
   @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
@@ -15,6 +16,8 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # background job queue (ADR-0007) — data goes stale again once the tab
   # closes, which is fine since nobody's looking at it then.
   @refresh_interval_ms :timer.seconds(60)
+
+  @empty_distribution %{days: [], has_drains: false, any_data: false, earn_max: 0.0, drain_max: 0.0}
 
   # A no-JS +/- toggle for an Activity's Effect: two radio buttons styled as
   # pills, submitting as the `effect` form field ("positive"/"negative").
@@ -76,6 +79,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> assign(:today, nil)
       |> assign(:show_debug, false)
       |> assign(:activities, nil)
+      |> assign(:week_distribution, @empty_distribution)
       |> assign(:editing_activity_id, nil)
       |> assign(:editing_multiplier, nil)
       |> assign(:pending_activity, nil)
@@ -532,12 +536,62 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   end
 
   defp load_activities(socket, activities, totals, raw_entries) do
-    assign(
-      socket,
+    socket
+    |> assign(
       :activities,
       Enum.map(activities, &with_activity_minutes(&1, socket, totals, raw_entries))
     )
+    |> assign(:week_distribution, load_distribution(socket, raw_entries))
   end
+
+  # The weekly distribution chart's data (#16). Guards the same `timezone:
+  # nil` window as `load_today/3` — `week_distribution/4` buckets by local
+  # calendar day, which needs a real IANA zone.
+  defp load_distribution(%{assigns: %{current_user: %{timezone: nil}}}, _raw_entries) do
+    @empty_distribution
+  end
+
+  defp load_distribution(socket, raw_entries) do
+    case PlayBalance.week_distribution(
+           socket.assigns.current_user,
+           DateTime.utc_now(),
+           [],
+           raw_entries
+         ) do
+      {:ok, distribution} -> distribution
+      {:error, _reason} -> @empty_distribution
+    end
+  end
+
+  # The Activities (already enriched by `with_activity_minutes/4`) that
+  # contributed any minutes to the window — the legend's rows, in the
+  # dashboard's Activity order.
+  defp legend_activities(activities, %{days: days}) do
+    contributing =
+      for day <- days, segment <- day.earn ++ day.drain, into: MapSet.new(), do: segment.activity_id
+
+    Enum.filter(activities || [], &MapSet.member?(contributing, &1.id))
+  end
+
+  # The chart's linear scale: `earn_max` sets px-per-minute for both arms
+  # (#16). A drains-only week has no earn arm to anchor it, so it falls back
+  # to `drain_max` — the red columns must still render (#12, story 12).
+  defp chart_scale(%{earn_max: earn_max, drain_max: drain_max}) do
+    if earn_max > 0, do: earn_max, else: drain_max
+  end
+
+  # The px height one chart arm gets at full scale. The upward chart's
+  # track adds headroom below the tallest bar for the day label.
+  @chart_arm_px 128
+  defp chart_arm_px, do: @chart_arm_px
+  defp chart_track_px, do: @chart_arm_px + 32
+
+  # Column arm height in px at the chart's linear scale, so a drain column
+  # is exactly as tall as its magnitude needs relative to the busiest day.
+  defp arm_px(_total, scale) when scale <= 0, do: 0.0
+  defp arm_px(total, scale), do: total / scale * @chart_arm_px
+
+  defp day_label(date), do: Calendar.strftime(date, "%a")
 
   @empty_activity_minutes %{
     minutes: 0.0,
@@ -644,6 +698,26 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
   defp today_from(%{timezone: nil}, _now), do: nil
   defp today_from(user, now), do: LocalDay.start_of_today(user.timezone, now)
+
+  # The Effect ramp rung for an Activity's stored (unsigned) Multiplier
+  # (#16 / #11). `effect` picks teal vs red in `EffectColors`.
+  defp activity_band(activity), do: PlayBalance.band(activity.multiplier)
+
+  # The chip / inline label: a signed magnitude, `+` for an earner and the
+  # U+2212 minus for a drain (matching the chart's sign glyph).
+  defp signed_multiplier(activity) do
+    sign = if activity.effect == :negative, do: "−", else: "+"
+    "#{sign}#{activity.multiplier}×"
+  end
+
+  # A drain's per-Activity play figures (`play_minutes` / `week_play_minutes`
+  # are already signed negative) render red, behind a leading U+2212 (the
+  # chart's sign glyph); an earner's stay purple with no prefix.
+  defp play_value_class(%{effect: :negative}), do: "font-semibold text-red-700"
+  defp play_value_class(_activity), do: "font-semibold text-purple-600"
+
+  defp play_prefix(%{effect: :negative}), do: "−"
+  defp play_prefix(_activity), do: ""
 
   defp balance_percentage(%{total: total}) when total >= 200, do: 100
   defp balance_percentage(%{total: total}), do: min(100, round(total / 2))

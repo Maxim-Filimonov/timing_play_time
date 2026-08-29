@@ -89,7 +89,7 @@
                 </div>
                 <div class="flex justify-between">
                   <span>Used Today</span>
-                  <span class="font-bold text-red-300">{Float.round(@today.used_today, 1)}</span>
+                  <span class="font-bold text-amber-300">{Float.round(@today.used_today, 1)}</span>
                 </div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
@@ -104,7 +104,7 @@
                 </div>
                 <div class="flex justify-between">
                   <span>Used</span>
-                  <span class="font-bold text-red-300">{Float.round(@today.week_used, 1)}</span>
+                  <span class="font-bold text-amber-300">{Float.round(@today.week_used, 1)}</span>
                 </div>
               </div>
               <div class="bg-white/10 rounded-xl p-4 backdrop-blur-sm">
@@ -364,6 +364,102 @@
         </form>
       </div>
 
+      <%!-- Weekly distribution chart (#16). Render ladder (#12): the whole
+      card is absent when the window holds no tracked minutes (rung 1); a
+      plain upward column chart when no Draining Activity is configured
+      (rung 2); a diverging chart around a zero baseline — earn up, drain
+      down, same px-per-minute scale — once one exists (rung 3). --%>
+      <div
+        :if={@week_distribution.any_data}
+        class="bg-white rounded-2xl p-6 shadow-lg border-2 border-purple-200"
+      >
+        <h2 class="text-2xl font-bold text-gray-900 mb-6">📊 This week by day</h2>
+
+        <div
+          data-role="effect-legend"
+          class="flex flex-wrap gap-x-4 gap-y-2 mb-6 text-sm text-gray-600"
+        >
+          <div
+            :for={activity <- legend_activities(@activities, @week_distribution)}
+            class="flex items-center gap-2"
+          >
+            <span class={"inline-block size-3 rounded-sm #{EffectColors.segment_class(activity.effect, activity_band(activity))}"}>
+            </span>
+            <span>{activity.name}</span>
+            <span class="font-semibold text-gray-500">{signed_multiplier(activity)}</span>
+          </div>
+        </div>
+
+        <%= if @week_distribution.has_drains do %>
+          <div data-chart="diverging" class="flex items-stretch gap-2">
+            <div
+              class="flex flex-col justify-between text-xs text-gray-400 pr-1 text-right"
+              style="width: 2.5rem"
+            >
+              <span>earn</span>
+              <span>0</span>
+              <span>drain</span>
+            </div>
+            <div class="flex-1 flex items-stretch gap-1">
+              <div
+                :for={day <- @week_distribution.days}
+                class="flex-1 flex flex-col items-center"
+              >
+                <div class="w-full flex flex-col justify-end" style={"height: #{chart_arm_px()}px"}>
+                  <div
+                    class="w-full flex flex-col-reverse rounded-t overflow-hidden"
+                    style={"height: #{arm_px(day.earn_total, chart_scale(@week_distribution))}px"}
+                  >
+                    <div
+                      :for={segment <- day.earn}
+                      class={EffectColors.segment_class(:positive, segment.band)}
+                      style={"flex: #{segment.play_minutes}"}
+                      title={"#{segment.name}: #{Float.round(segment.play_minutes, 1)}"}
+                    >
+                    </div>
+                  </div>
+                </div>
+                <div class="w-full border-t border-gray-300"></div>
+                <div
+                  class="w-full flex flex-col rounded-b overflow-hidden"
+                  style={"height: #{arm_px(day.drain_total, chart_scale(@week_distribution))}px"}
+                >
+                  <div
+                    :for={segment <- day.drain}
+                    class={EffectColors.segment_class(:negative, segment.band)}
+                    style={"flex: #{segment.play_minutes}"}
+                    title={"#{segment.name}: #{Float.round(segment.play_minutes, 1)}"}
+                  >
+                  </div>
+                </div>
+                <span class="mt-1 text-xs text-gray-500">{day_label(day.date)}</span>
+              </div>
+            </div>
+          </div>
+        <% else %>
+          <div data-chart="upward" class="flex items-end gap-1" style={"height: #{chart_track_px()}px"}>
+            <div
+              :for={day <- @week_distribution.days}
+              class="flex-1 flex flex-col items-center justify-end h-full"
+            >
+              <div
+                class="w-full flex flex-col-reverse rounded-t overflow-hidden"
+                style={"height: #{arm_px(day.earn_total, chart_scale(@week_distribution))}px"}
+              >
+                <div
+                  :for={segment <- day.earn}
+                  class={EffectColors.segment_class(:positive, segment.band)}
+                  style={"flex: #{segment.play_minutes}"}
+                  title={"#{segment.name}: #{Float.round(segment.play_minutes, 1)}"}
+                >
+                </div>
+              </div>
+              <span class="mt-1 text-xs text-gray-500">{day_label(day.date)}</span>
+            </div>
+          </div>
+        <% end %>
+      </div>
+
       <%!-- Activities List --%>
       <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-purple-200">
         <h2 class="text-2xl font-bold text-gray-900 mb-6">🎯 Your Activities</h2>
@@ -463,12 +559,13 @@
                   </div>
                 </form>
               <% else %>
-                <div class="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200">
+                <div class={"flex items-center gap-4 p-4 rounded-xl bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 border-l-4 #{EffectColors.rail_class(activity.effect, activity_band(activity))}"}>
                   <div class="flex-1">
                     <div class="font-bold text-gray-900 text-lg">{activity.name}</div>
                     <div class="text-sm text-gray-600">
-                      Multiplier:
-                      <span class="font-semibold text-purple-600">{activity.multiplier}×</span>
+                      <span class={"inline-block rounded px-2 py-0.5 text-white font-semibold #{EffectColors.chip_class(activity.effect, activity_band(activity))}"}>
+                        {signed_multiplier(activity)}
+                      </span>
                       · Source:
                       <span class="font-mono text-xs text-gray-500">
                         {activity.time_source_identifier}
@@ -480,10 +577,10 @@
                         format={:short}
                         value_class="font-semibold text-gray-900"
                       />
-                      · play <.time_display
-                        minutes={activity.play_minutes}
+                      · play {play_prefix(activity)}<.time_display
+                        minutes={abs(activity.play_minutes)}
                         format={:short}
-                        value_class="font-semibold text-purple-600"
+                        value_class={play_value_class(activity)}
                       />
                     </div>
                     <div class="text-sm text-gray-600 mt-1">
@@ -492,10 +589,10 @@
                         format={:short}
                         value_class="font-semibold text-gray-900"
                       />
-                      · play <.time_display
-                        minutes={activity.week_play_minutes}
+                      · play {play_prefix(activity)}<.time_display
+                        minutes={abs(activity.week_play_minutes)}
                         format={:short}
-                        value_class="font-semibold text-purple-600"
+                        value_class={play_value_class(activity)}
                       />
                     </div>
                   </div>
