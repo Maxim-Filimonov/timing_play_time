@@ -5,12 +5,17 @@ defmodule TimingPlayTime.PlayBalance.Today do
 
   ## Fields
 
-    * `:earned_today` / `:used_today` - today's raw (non-ledger) totals:
-      how much was earned/spent today, independent of what a spend was
-      actually matched against.
-    * `:week_earned` / `:week_used` - the Entry Expiry Window's raw
-      totals: every in-window entry's original `play_minutes`, and every
-      recent usage's `minutes`, both summed with no ledger involved.
+    * `:earned_today` / `:drained_today` / `:used_today` - today's raw
+      (non-ledger) totals: the gross positive magnitude earned by positive
+      Activities, the gross positive magnitude of today's Draining
+      Activities (ADR-0013), and how much was spent today — each
+      independent of what a spend was actually matched against.
+    * `:week_earned` / `:week_drained` / `:week_used` - the Entry Expiry
+      Window's raw totals: every in-window positive entry's original
+      `play_minutes`, every in-window drain entry's magnitude, and every
+      recent usage's `minutes`, all summed with no ledger involved.
+      `:week_earned` stays gross — a week of 300 earned against 280
+      drained reads as exactly that, not as "20m earned".
     * `:pushscroll_balance` - the current Manual Sync value.
     * `:today_net` - today's earned Play Minutes, net of the Entry
       Consumption Ledger's draw-down. Never negative.
@@ -23,8 +28,8 @@ defmodule TimingPlayTime.PlayBalance.Today do
     * `:playtime` - `:today_net + :reserve`, the dashboard's hero figure.
       Unclamped.
 
-      **`playtime == week_earned - week_used + pushscroll_balance`,
-      for almost every spend** logged after
+      **`playtime == week_earned - week_drained - week_used +
+      pushscroll_balance`, for almost every spend** logged after
       [ADR-0012](../../../docs/adr/0012-persisted-entry-consumption-ledger-with-window-bounded-spending.md),
       since a spend can no longer draw on Backlog, there's nothing outside
       this week's own earned/used to reconcile (see
@@ -44,8 +49,10 @@ defmodule TimingPlayTime.PlayBalance.Today do
 
   @enforce_keys [
     :earned_today,
+    :drained_today,
     :used_today,
     :week_earned,
+    :week_drained,
     :week_used,
     :pushscroll_balance,
     :today_net,
@@ -56,8 +63,10 @@ defmodule TimingPlayTime.PlayBalance.Today do
 
   @type t :: %__MODULE__{
           earned_today: float(),
+          drained_today: float(),
           used_today: float(),
           week_earned: float(),
+          week_drained: float(),
           week_used: float(),
           pushscroll_balance: float(),
           today_net: float(),

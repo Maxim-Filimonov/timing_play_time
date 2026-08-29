@@ -75,6 +75,7 @@ defmodule TimingPlayTime.EntryLedger do
           required(:time_entry_id) => term(),
           required(:start_date) => DateTime.t(),
           required(:play_minutes) => float(),
+          required(:effect) => :positive | :negative,
           optional(:remaining) => float()
         }
 
@@ -89,6 +90,7 @@ defmodule TimingPlayTime.EntryLedger do
           time_entry_id: term(),
           start_date: DateTime.t(),
           play_minutes: float(),
+          effect: :positive | :negative,
           remaining: float()
         }
 
@@ -173,7 +175,10 @@ defmodule TimingPlayTime.EntryLedger do
           activity_id: activity.id,
           time_entry_id: to_string(Map.get(raw_entry, :time_entry_id) || raw_entry.start_date),
           start_date: raw_entry.start_date,
-          play_minutes: raw_entry.minutes * activity.multiplier
+          # Unsigned magnitude — `effect` is copied through, no sign applied
+          # here (ADR-0013). The sign is only ever taken in `PlayBalance`.
+          play_minutes: raw_entry.minutes * activity.multiplier,
+          effect: activity.effect
         }
       end)
     end)

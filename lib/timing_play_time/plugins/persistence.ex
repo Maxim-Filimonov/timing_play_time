@@ -11,6 +11,14 @@ defmodule TimingPlayTime.Plugins.Persistence do
   missing one (`{:error, :not_found}`), not leak another user's data.
   """
 
+  @typedoc """
+  An Activity's direction (ADR-0013): `:positive` earns Play Minutes,
+  `:negative` (a Draining Activity) subtracts them. Always an atom on
+  every read path; `"positive"` / `"negative"` strings are normalised to
+  it on write, not rejected.
+  """
+  @type effect :: :positive | :negative
+
   @doc """
   Lists all active activities for a user.
 
@@ -38,12 +46,17 @@ defmodule TimingPlayTime.Plugins.Persistence do
     * `attrs` - Map containing:
       * `:name` - Activity name (required)
       * `:time_source_identifier` - Timing project ID (required)
-      * `:multiplier` - Multiplier factor (required, float)
+      * `:multiplier` - Multiplier magnitude (required, float, must be > 0);
+        an unsigned magnitude — direction lives in `:effect` (ADR-0013)
+      * `:effect` - `:positive | :negative` (optional, defaults to
+        `:positive`; `"positive"` / `"negative"` strings are normalised to
+        the atom). Returned as an atom on every read path.
       * `:activated_at` - Activation timestamp (defaults to now)
 
   ## Returns
     * `{:ok, activity}` - The created activity
-    * `{:error, reason}` - If creation fails
+    * `{:error, reason}` - If creation fails (e.g. `multiplier <= 0`, or an
+      `:effect` that isn't a known direction)
   """
   @callback create_activity(user_id :: String.t(), attrs :: map()) ::
               {:ok, map()} | {:error, term()}
@@ -51,10 +64,16 @@ defmodule TimingPlayTime.Plugins.Persistence do
   @doc """
   Updates an existing activity, scoped to the given user.
 
+  `:multiplier` (magnitude, must stay > 0) and `:effect`
+  (`:positive | :negative`, strings normalised) may each be updated on
+  their own — `%{effect: :negative}` flips direction without touching
+  `:multiplier` (ADR-0013).
+
   ## Returns
     * `{:ok, activity}` - The updated activity
     * `{:error, :not_found}` - If the activity doesn't exist, or belongs to another user
-    * `{:error, reason}` - If update fails
+    * `{:error, reason}` - If update fails (e.g. `multiplier <= 0`, or an
+      unknown `:effect`)
   """
   @callback update_activity(user_id :: String.t(), id :: String.t(), attrs :: map()) ::
               {:ok, map()} | {:error, term()}

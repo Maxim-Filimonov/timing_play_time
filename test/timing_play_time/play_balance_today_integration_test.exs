@@ -27,7 +27,8 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
       activity = %{
         activated_at: ~U[2026-07-20 00:00:00Z],
         time_source_identifier: "coding-proj-1",
-        multiplier: 1.5
+        multiplier: 1.5,
+        effect: :positive
       }
 
       # `now` is 2026-07-26T05:00:00Z = 2026-07-26T17:00:00+12:00 in
@@ -71,7 +72,8 @@ defmodule TimingPlayTime.PlayBalanceTodayIntegrationTest do
       activity = %{
         activated_at: ~U[2026-07-25 18:00:00Z],
         time_source_identifier: "coding-proj-1",
-        multiplier: 2.0
+        multiplier: 2.0,
+        effect: :positive
       }
 
       now = ~U[2026-07-26 05:00:00Z]

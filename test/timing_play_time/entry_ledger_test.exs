@@ -154,7 +154,9 @@ defmodule TimingPlayTime.EntryLedgerTest do
 
   describe "build_entries/2" do
     test "applies each Activity's multiplier and tags entries with the Activity" do
-      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 2.0}]
+      activities = [
+        %{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 2.0, effect: :positive}
+      ]
 
       raw_entries = %{
         "coding-proj-1" => [
@@ -166,11 +168,29 @@ defmodule TimingPlayTime.EntryLedgerTest do
       assert entry.activity_id == "a1"
       assert entry.time_entry_id == "e1"
       assert entry.play_minutes == 20.0
+      assert entry.effect == :positive
       assert entry.start_date == ~U[2026-07-25 01:00:00Z]
     end
 
+    test "copies each Activity's effect onto its entries, leaving play_minutes an unsigned magnitude (ADR-0013)" do
+      activities = [
+        %{id: "drain", time_source_identifier: "youtube-proj-1", multiplier: 2.0, effect: :negative}
+      ]
+
+      raw_entries = %{
+        "youtube-proj-1" => [
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: "e1"}
+        ]
+      }
+
+      assert [entry] = EntryLedger.build_entries(activities, raw_entries)
+      assert entry.effect == :negative
+      # Magnitude only — no sign applied here.
+      assert entry.play_minutes == 20.0
+    end
+
     test "normalizes every time_entry_id to a string, including the start_date fallback" do
-      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0}]
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0, effect: :positive}]
 
       raw_entries = %{
         "coding-proj-1" => [
@@ -185,7 +205,7 @@ defmodule TimingPlayTime.EntryLedgerTest do
     end
 
     test "skips an Activity with no entries in the fetch" do
-      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0}]
+      activities = [%{id: "a1", time_source_identifier: "coding-proj-1", multiplier: 1.0, effect: :positive}]
 
       assert EntryLedger.build_entries(activities, %{}) == []
     end

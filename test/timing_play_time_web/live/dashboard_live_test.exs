@@ -243,6 +243,9 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     assert html =~ "earned this week"
     assert html =~ "used this week"
     assert html =~ "This Week"
+    # The reconciliation line and the "This Week" block now carry a Drained
+    # term (reads 0 for this no-drain fixture) — ADR-0013.
+    assert html =~ "Drained"
   end
 
   test "clicking Edit on an Activity shows an inline form pre-filled with its current values", %{

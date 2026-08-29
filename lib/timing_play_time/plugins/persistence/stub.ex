@@ -135,31 +135,51 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
     end
   end
 
+  # The Stub gains its first Activity-field validation here (ADR-0013):
+  # `multiplier > 0` is a contract invariant, and `:effect` must be a known
+  # direction. Checked before the `:ets.insert` so a bad attr leaves no row,
+  # mirroring the Sqlite changeset rejecting the same inputs.
   @impl true
   def handle_call({:create_activity, user_id, attrs}, _from, state) do
-    id = generate_id()
-    activated_at = Map.get(attrs, :activated_at, DateTime.utc_now())
+    case validate_activity_attrs(Map.get(attrs, :multiplier), Map.get(attrs, :effect, :positive)) do
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
 
-    activity = %{
-      id: id,
-      name: Map.fetch!(attrs, :name),
-      time_source_identifier: Map.fetch!(attrs, :time_source_identifier),
-      multiplier: Map.fetch!(attrs, :multiplier),
-      activated_at: activated_at,
-      user_id: user_id
-    }
+      {:ok, effect} ->
+        id = generate_id()
+        activated_at = Map.get(attrs, :activated_at, DateTime.utc_now())
 
-    :ets.insert(@activities_table, {id, activity})
-    {:reply, {:ok, activity}, state}
+        activity = %{
+          id: id,
+          name: Map.fetch!(attrs, :name),
+          time_source_identifier: Map.fetch!(attrs, :time_source_identifier),
+          multiplier: Map.fetch!(attrs, :multiplier),
+          effect: effect,
+          activated_at: activated_at,
+          user_id: user_id
+        }
+
+        :ets.insert(@activities_table, {id, activity})
+        {:reply, {:ok, activity}, state}
+    end
   end
 
   @impl true
   def handle_call({:update_activity, user_id, id, attrs}, _from, state) do
     case :ets.lookup(@activities_table, id) do
       [{^id, %{user_id: ^user_id} = activity}] ->
-        updated_activity = Map.merge(activity, attrs)
-        :ets.insert(@activities_table, {id, updated_activity})
-        {:reply, {:ok, updated_activity}, state}
+        merged = Map.merge(activity, Map.delete(attrs, :effect))
+        raw_effect = Map.get(attrs, :effect, Map.get(activity, :effect, :positive))
+
+        case validate_activity_attrs(Map.get(merged, :multiplier), raw_effect) do
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+
+          {:ok, effect} ->
+            updated_activity = Map.put(merged, :effect, effect)
+            :ets.insert(@activities_table, {id, updated_activity})
+            {:reply, {:ok, updated_activity}, state}
+        end
 
       _ ->
         {:reply, {:error, :not_found}, state}
@@ -308,6 +328,27 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
   defp generate_id do
     :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
   end
+
+  # Both Activity-field invariants in one place (ADR-0013 / #10): `multiplier`
+  # must be a positive number, and `raw_effect` must normalise to a known
+  # direction (`"positive"` / `"negative"` strings count — normalised, not
+  # rejected). Returns the normalised `:effect` for the caller to store.
+  defp validate_activity_attrs(multiplier, raw_effect) do
+    cond do
+      not (is_number(multiplier) and multiplier > 0) ->
+        {:error, :invalid_multiplier}
+
+      true ->
+        case normalize_effect(raw_effect) do
+          :error -> {:error, :invalid_effect}
+          effect -> {:ok, effect}
+        end
+    end
+  end
+
+  defp normalize_effect(effect) when effect in [:positive, "positive"], do: :positive
+  defp normalize_effect(effect) when effect in [:negative, "negative"], do: :negative
+  defp normalize_effect(_other), do: :error
 
   defp valid_consumption?(%{activity_id: activity_id, time_entry_id: time_entry_id, minutes: minutes}) do
     activity_id != nil and time_entry_id != nil and is_number(minutes)

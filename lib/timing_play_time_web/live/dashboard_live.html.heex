@@ -53,18 +53,23 @@
               />
             </div>
 
-            <%!-- Playtime == week_earned - week_used + pushscroll_balance,
-            for almost every spend logged after ADR-0012 (see
-            PlayBalance.Today's moduledoc for the one known gap) — shown
-            so the hero number is checkable at a glance, rather than
+            <%!-- Playtime == week_earned - week_drained - week_used +
+            pushscroll_balance, for almost every spend logged after ADR-0012
+            (see PlayBalance.Today's moduledoc for the one known gap) —
+            shown so the hero number is checkable at a glance, rather than
             requiring an explanation of how Today's PT/Reserve are
-            split. --%>
+            split. Drained is 0 for a User with no Draining Activities
+            (ADR-0013). --%>
             <p class="text-purple-200 text-sm mb-6">
               = <.time_display
                 minutes={@today.week_earned}
                 format={:short}
                 value_class="font-semibold text-white"
               /> earned this week − <.time_display
+                minutes={@today.week_drained}
+                format={:short}
+                value_class="font-semibold text-white"
+              /> drained this week − <.time_display
                 minutes={@today.week_used}
                 format={:short}
                 value_class="font-semibold text-white"
@@ -92,6 +97,10 @@
                 <div class="flex justify-between">
                   <span>Earned</span>
                   <span class="font-bold">{Float.round(@today.week_earned, 1)}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span>Drained</span>
+                  <span class="font-bold text-red-300">{Float.round(@today.week_drained, 1)}</span>
                 </div>
                 <div class="flex justify-between">
                   <span>Used</span>
