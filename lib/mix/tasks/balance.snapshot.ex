@@ -176,12 +176,17 @@ defmodule Mix.Tasks.Balance.Snapshot do
         week = PlayBalance.week_activity_minutes(activity, now, time_source_opts)
 
         Mix.shell().info(
-          "  #{activity.name} (x#{activity.multiplier}, #{activity.time_source_identifier}): " <>
+          "  #{activity.name} (#{multiplier_label(activity)}, #{activity.time_source_identifier}): " <>
             "today=#{fmt_result(today)} week=#{fmt_result(week)}"
         )
       end)
     end
   end
+
+  # `multiplier` is an unsigned magnitude now (ADR-0013) — label the
+  # direction rather than sign the figure.
+  defp multiplier_label(%{effect: :negative} = activity), do: "drain x#{activity.multiplier}"
+  defp multiplier_label(activity), do: "x#{activity.multiplier}"
 
   defp fmt_result({:ok, %{play_minutes: minutes}}), do: fmt(minutes)
   defp fmt_result({:error, reason}), do: "error(#{inspect(reason)})"

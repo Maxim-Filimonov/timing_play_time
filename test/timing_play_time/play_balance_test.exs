@@ -143,7 +143,7 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
   describe "activity_today_minutes/2" do
     test "looks up the activity's :today total from a pre-fetched totals map and applies its multiplier" do
-      activity = %{time_source_identifier: "coding-proj-1", multiplier: 2.0}
+      activity = %{time_source_identifier: "coding-proj-1", multiplier: 2.0, effect: :positive}
       totals = %{"coding-proj-1" => %{cumulative: 999.0, today: 15.0}}
 
       assert PlayBalance.activity_today_minutes(totals, activity) ==
@@ -151,10 +151,18 @@ defmodule TimingPlayTime.PlayBalanceTest do
     end
 
     test "returns zero when the activity's identifier isn't present in totals" do
-      activity = %{time_source_identifier: "coding-proj-1", multiplier: 2.0}
+      activity = %{time_source_identifier: "coding-proj-1", multiplier: 2.0, effect: :positive}
 
       assert PlayBalance.activity_today_minutes(%{}, activity) ==
                %{minutes: 0.0, play_minutes: 0.0}
+    end
+
+    test "a Draining Activity's play_minutes is negative — its magnitude times -1 (ADR-0013)" do
+      drain = %{time_source_identifier: "youtube-proj-1", multiplier: 2.0, effect: :negative}
+      totals = %{"youtube-proj-1" => %{cumulative: 999.0, today: 15.0}}
+
+      assert PlayBalance.activity_today_minutes(totals, drain) ==
+               %{minutes: 15.0, play_minutes: -30.0}
     end
   end
 
@@ -269,6 +277,26 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert minutes == 0.0
       assert play_minutes == 0.0
+    end
+
+    test "a Draining Activity's weekly play_minutes is negative (ADR-0013)", %{user: user} do
+      now = ~U[2026-07-25 10:00:00Z]
+
+      {:ok, drain} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "youtube-proj-1",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      raw_entries = %{
+        "youtube-proj-1" => [%{start_date: DateTime.add(now, -1, :day), minutes: 30.0}]
+      }
+
+      assert {:ok, %{minutes: 30.0, play_minutes: -60.0}} =
+               PlayBalance.week_activity_minutes(drain, now, [], raw_entries)
     end
   end
 
@@ -565,6 +593,122 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert_in_delta today.playtime,
                        today.week_earned - today.week_used + today.pushscroll_balance,
+                       0.0001
+    end
+  end
+
+  describe "compute_today/4 with Draining Activities (ADR-0013)" do
+    setup %{user: user} do
+      {:ok, coding} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      {:ok, youtube} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "youtube-proj-1",
+          multiplier: 2.0,
+          effect: :negative,
+          activated_at: ~U[2026-01-01 00:00:00Z]
+        })
+
+      %{coding: coding, youtube: youtube, now: ~U[2026-07-25 10:00:00Z]}
+    end
+
+    test "week_drained/drained_today carry the gross drain magnitude; week_earned stays gross",
+         %{user: user, now: now} do
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: ~U[2026-07-25 01:00:00Z], minutes: 40.0, time_entry_id: "c1"}],
+        "youtube-proj-1" => [%{start_date: ~U[2026-07-25 02:00:00Z], minutes: 10.0, time_entry_id: "y1"}]
+      }
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+
+      assert today.earned_today == 40.0
+      # 10 tracked min * 2.0 multiplier, gross positive magnitude.
+      assert today.drained_today == 20.0
+      assert today.week_earned == 40.0
+      assert today.week_drained == 20.0
+      # today_signed = 40 - 20 = 20, above the floor.
+      assert today.today_net == 20.0
+      assert today.reserve == 0.0
+      assert today.playtime == 20.0
+    end
+
+    test "a day whose drains exceed its earnings floors today_net at 0 and spills the excess into reserve",
+         %{user: user, now: now} do
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: ~U[2026-07-25 01:00:00Z], minutes: 10.0, time_entry_id: "c1"}],
+        "youtube-proj-1" => [%{start_date: ~U[2026-07-25 02:00:00Z], minutes: 30.0, time_entry_id: "y1"}]
+      }
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+
+      # today_signed = 10 - (30 * 2.0) = -50
+      assert today.today_net == 0.0
+      assert today.reserve == -50.0
+      # playtime dropped by the full drain, not floored away.
+      assert today.playtime == -50.0
+    end
+
+    test "a logged spend never draws from a drain entry — no EntryConsumption row references it",
+         %{user: user, now: now, coding: coding, youtube: youtube} do
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: ~U[2026-07-25 01:00:00Z], minutes: 20.0, time_entry_id: "c1"}],
+        "youtube-proj-1" => [%{start_date: ~U[2026-07-25 02:00:00Z], minutes: 100.0, time_entry_id: "y1"}]
+      }
+
+      # The spend can only reach coding's 20 min; the rest is deficit — the
+      # drain's 100 magnitude is not in the pool at all.
+      assert {:ok, %{deficit: 30.0}} =
+               PlayBalance.log_spend(user, 50.0, now, [], raw_entries)
+
+      assert {:ok, rows} = PersistenceStub.list_entry_consumption(user.id)
+      refute Enum.any?(rows, &(&1.activity_id == youtube.id))
+      assert [%{activity_id: coding_id, consumed_minutes: 20.0}] = rows
+      assert coding_id == coding.id
+    end
+
+    test "a drain entry older than the Entry Expiry Window contributes to no window figure",
+         %{user: user, now: now} do
+      raw_entries = %{
+        "youtube-proj-1" => [
+          %{start_date: DateTime.add(now, -8, :day), minutes: 100.0, time_entry_id: "y-old"}
+        ]
+      }
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+
+      assert today.week_drained == 0.0
+      assert today.drained_today == 0.0
+      assert today.playtime == 0.0
+    end
+
+    test "playtime == week_earned - week_drained - week_used + pushscroll_balance for a week with drains",
+         %{user: user, now: now} do
+      {:ok, _} = PersistenceStub.set_manual_sync_total(user.id, 5.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -3, :day), minutes: 50.0, time_entry_id: "c-old"},
+          %{start_date: ~U[2026-07-25 01:00:00Z], minutes: 20.0, time_entry_id: "c-today"}
+        ],
+        "youtube-proj-1" => [
+          %{start_date: ~U[2026-07-25 02:00:00Z], minutes: 15.0, time_entry_id: "y-today"}
+        ]
+      }
+
+      assert {:ok, _} = PlayBalance.log_spend(user, 10.0, now, [], raw_entries)
+
+      assert {:ok, today} = PlayBalance.compute_today(user, now, [], raw_entries)
+
+      assert_in_delta today.playtime,
+                       today.week_earned - today.week_drained - today.week_used +
+                         today.pushscroll_balance,
                        0.0001
     end
   end

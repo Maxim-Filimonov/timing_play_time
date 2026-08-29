@@ -346,8 +346,10 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
   @empty_today %Today{
     earned_today: 0.0,
+    drained_today: 0.0,
     used_today: 0.0,
     week_earned: 0.0,
+    week_drained: 0.0,
     week_used: 0.0,
     pushscroll_balance: 0.0,
     today_net: 0.0,

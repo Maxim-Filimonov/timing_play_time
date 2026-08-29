@@ -119,7 +119,7 @@ defmodule TimingPlayTime.PlayBalance do
   """
   def activity_today_minutes(totals, activity) do
     minutes = minutes_for(totals, activity, :today)
-    %{minutes: minutes, play_minutes: minutes * activity.multiplier}
+    %{minutes: minutes, play_minutes: play_minutes(activity, minutes)}
   end
 
   @doc """
@@ -166,7 +166,7 @@ defmodule TimingPlayTime.PlayBalance do
       |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
       |> Enum.reduce(0.0, &(&2 + &1.minutes))
 
-    {:ok, %{minutes: minutes, play_minutes: minutes * activity.multiplier}}
+    {:ok, %{minutes: minutes, play_minutes: play_minutes(activity, minutes)}}
   end
 
   @doc """
@@ -202,16 +202,20 @@ defmodule TimingPlayTime.PlayBalance do
   Reserve rather than Today's PT, alongside the rest of the carried-over
   history.
 
-  `earned_today` and `used_today` are the raw (non-ledger) day totals shown
-  alongside `today_net`, for display — how much was earned/spent today,
-  independent of what a spend was actually matched against. `week_earned`
+  `earned_today`, `drained_today` and `used_today` are the raw (non-ledger)
+  day totals shown alongside `today_net`, for display — the gross magnitude
+  earned by positive Activities, the gross magnitude of today's Draining
+  Activities (ADR-0013), and how much was spent today, each independent of
+  what a spend was actually matched against. `week_earned`, `week_drained`
   and `week_used` are the same idea over the full window: every in-window
-  entry's original (pre-consumption) `play_minutes`, and every recent
-  usage's `minutes`, both summed with no ledger involved.
+  positive entry's original (pre-consumption) `play_minutes`, every
+  in-window drain entry's magnitude, and every recent usage's `minutes`,
+  each summed with no ledger involved. A day whose drains exceed its
+  earnings floors `today_net` at 0 and spills the remainder into `reserve`.
 
   See `TimingPlayTime.PlayBalance.Today` for the full field-by-field
-  breakdown, including the `playtime == week_earned - week_used +
-  pushscroll_balance` reconciliation identity.
+  breakdown, including the `playtime == week_earned - week_drained -
+  week_used + pushscroll_balance` reconciliation identity.
 
   `raw_entries` — when given (e.g. by `DashboardLive`, sharing one fetch
   across `week_activity_minutes/4` too) — is `EntryLedger.load/4`'s return
@@ -226,8 +230,10 @@ defmodule TimingPlayTime.PlayBalance do
       iex> PlayBalance.compute_today(user)
       {:ok, %TimingPlayTime.PlayBalance.Today{
         earned_today: 27.5,
+        drained_today: 0.0,
         used_today: 10.0,
         week_earned: 120.0,
+        week_drained: 0.0,
         week_used: 90.0,
         pushscroll_balance: 15.0,
         today_net: 17.5,
@@ -262,12 +268,27 @@ defmodule TimingPlayTime.PlayBalance do
       {today_entries, reserve_entries} =
         Enum.split_with(week_entries, &(DateTime.compare(&1.start_date, today_from) != :lt))
 
-      today_net = sum_remaining(today_entries)
-      deficit = max(total_used - EntryLedger.total_consumed(consumption), 0.0)
-      reserve = sum_remaining(reserve_entries) + pushscroll_balance - deficit
+      # Today's entries summed with drains negative (ADR-0013). Floored at 0,
+      # with the negative remainder spilling into reserve — the same
+      # direction spend overflow already travels. `today_net + today_overflow
+      # == today_signed`, so `playtime` (`today_net + reserve`) is unchanged
+      # algebraically; the floor only moves the shortfall between the two.
+      today_signed = sum_remaining(today_entries)
+      today_net = max(today_signed, 0.0)
+      today_overflow = min(today_signed, 0.0)
 
-      earned_today = sum_play_minutes(today_entries)
-      week_earned = sum_play_minutes(week_entries)
+      deficit = max(total_used - EntryLedger.total_consumed(consumption), 0.0)
+
+      reserve =
+        sum_remaining(reserve_entries) + pushscroll_balance - deficit + today_overflow
+
+      {today_earn, today_drain} = Enum.split_with(today_entries, &positive?/1)
+      {week_earn, week_drain} = Enum.split_with(week_entries, &positive?/1)
+
+      earned_today = sum_magnitude(today_earn)
+      drained_today = sum_magnitude(today_drain)
+      week_earned = sum_magnitude(week_earn)
+      week_drained = sum_magnitude(week_drain)
 
       week_used =
         usages
@@ -277,8 +298,10 @@ defmodule TimingPlayTime.PlayBalance do
       {:ok,
        %Today{
          earned_today: earned_today,
+         drained_today: drained_today,
          used_today: used_today,
          week_earned: week_earned,
+         week_drained: week_drained,
          week_used: week_used,
          pushscroll_balance: pushscroll_balance,
          today_net: today_net,
@@ -349,6 +372,12 @@ defmodule TimingPlayTime.PlayBalance do
         activities
         |> EntryLedger.build_entries(raw_entries)
         |> Enum.filter(&(DateTime.compare(&1.start_date, window_start) != :lt))
+        # A spend never consumes a drain (ADR-0013's central invariant): the
+        # pool is positive-only, so `draw_down_deltas/2` can never produce an
+        # `EntryConsumption` row for a Draining Activity. `compute_today/4`'s
+        # `week_entries` is deliberately NOT filtered this way — there, drains
+        # must remain so they sum in negatively.
+        |> Enum.filter(&positive?/1)
         |> EntryLedger.with_remaining(EntryLedger.index_consumption(consumption))
 
       usage = %{id: :pending, minutes: minutes, logged_at: now}
@@ -382,9 +411,21 @@ defmodule TimingPlayTime.PlayBalance do
 
   defp sum_totals(activities, totals, key) do
     Enum.reduce(activities, 0.0, fn activity, acc ->
-      acc + minutes_for(totals, activity, key) * activity.multiplier
+      acc + play_minutes(activity, minutes_for(totals, activity, key))
     end)
   end
+
+  # The single place an Effect becomes a sign (ADR-0013). Every `×
+  # multiplier` site that produces a balance figure goes through one of
+  # these two; `EntryLedger.build_entries/2` deliberately does not (it
+  # stores an unsigned magnitude plus the entry's `effect`).
+  defp apply_effect(magnitude, :positive), do: magnitude
+  defp apply_effect(magnitude, :negative), do: -magnitude
+
+  defp play_minutes(activity, minutes),
+    do: apply_effect(minutes * activity.multiplier, activity.effect)
+
+  defp positive?(%{effect: effect}), do: effect == :positive
 
   defp minutes_for(totals, activity, key) do
     case Map.fetch(totals, activity.time_source_identifier) do
@@ -415,12 +456,18 @@ defmodule TimingPlayTime.PlayBalance do
     {:ok, raw_entries}
   end
 
-  defp sum_play_minutes(entries) do
+  # Gross, unsigned — the caller has already split entries by `effect`, so
+  # each of these sums is a single-direction magnitude (`week_earned`,
+  # `week_drained`, ...). See ADR-0013.
+  defp sum_magnitude(entries) do
     Enum.reduce(entries, 0.0, &(&2 + &1.play_minutes))
   end
 
+  # Signed — a drain entry's `remaining` subtracts. Feeds `today_signed`
+  # (floored, with the shortfall spilling into reserve) and `reserve`
+  # itself (ADR-0013).
   defp sum_remaining(entries) do
-    Enum.reduce(entries, 0.0, &(&2 + &1.remaining))
+    Enum.reduce(entries, 0.0, &(&2 + apply_effect(&1.remaining, &1.effect)))
   end
 
   # Diffs `drawn` (post-replay) against `pool` (pre-replay) by
