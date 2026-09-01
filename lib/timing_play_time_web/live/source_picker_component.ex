@@ -264,9 +264,9 @@ defmodule TimingPlayTimeWeb.SourcePickerComponent do
 
         <div
           :if={@open and @load_state == :ready}
-          class="absolute z-10 mt-1 w-full max-h-72 overflow-auto rounded-xl border-2 border-pink-200 bg-white shadow-xl"
+          class="absolute left-0 z-20 mt-1 min-w-full w-max max-w-sm max-h-64 overflow-y-auto rounded-xl border-2 border-pink-200 bg-white py-1 shadow-xl"
         >
-          <div :if={@results == []} class="px-4 py-3 text-sm text-gray-500">
+          <div :if={@results == []} class="px-3 py-2 text-sm text-gray-500">
             No match —
             <button
               type="button"
@@ -283,12 +283,10 @@ defmodule TimingPlayTimeWeb.SourcePickerComponent do
             phx-click="pick"
             phx-value-id={source.id}
             phx-target={@myself}
-            class="block w-full text-left px-4 py-2 text-sm hover:bg-pink-50"
+            title={path_string(source)}
+            class="block w-full truncate px-3 py-1.5 text-left text-sm leading-tight hover:bg-pink-50"
           >
-            <span :if={source.ancestors != []} class="text-gray-400">
-              {Enum.join(source.ancestors, " → ")} →
-            </span>
-            <span class="font-semibold text-gray-900">{source.title}</span>
+            <span :if={source.ancestors != []} class="text-gray-400">{Enum.join(source.ancestors, " → ")} → </span><span class="font-semibold text-gray-900">{source.title}</span>
           </button>
         </div>
       </div>
