@@ -111,4 +111,53 @@ defmodule TimingPlayTime.Plugins.TimeSource do
   @callback list_entries(activities :: [map()], opts :: keyword()) ::
               {:ok, %{optional(String.t()) => [%{start_date: DateTime.t(), minutes: float()}]}}
               | {:error, term()}
+
+  @typedoc """
+  One pickable source for the Activity form's Source picker (ADR-0014).
+
+    * `:id` - the identifier stored bare in `Activity.time_source_identifier`
+    * `:title` - the source's own name (leaf title, no ancestors)
+    * `:ancestors` - ancestor titles, root-first; `[]` for a top-level source
+    * `:depth` - `length(ancestors)`
+  """
+  @type source :: %{
+          id: String.t(),
+          title: String.t(),
+          ancestors: [String.t()],
+          depth: non_neg_integer()
+        }
+
+  @doc """
+  Lists every pickable source for the connected provider, powering the
+  hierarchical Source picker on the Add/Edit Activity forms (ADR-0014).
+
+  Unlike `get_elapsed_minutes/2` and `list_entries/2` this is not
+  per-Activity — it enumerates the provider's own sources, so it takes no
+  entity list and is exactly one external call regardless of how many
+  Activities exist.
+
+  ## Parameters
+    * `opts` - only `:client` is read: the caller-owned live connection, same
+      convention as the other callbacks. Without it, `{:error, :not_connected}`.
+
+  ## Returns
+    * `{:ok, sources}` - a **flat** list in pre-order DFS: each parent is
+      immediately followed by its own subtree, and siblings are ordered
+      case-insensitively by title within their level. Archived sources are
+      excluded. The adapter owns ordering and hierarchy construction —
+      callers never sort and never see a nested tree.
+    * `{:error, :not_connected}` - no `:client` given
+    * `{:error, reason}` - the source list couldn't be fetched
+
+  ## Examples
+
+      iex> list_sources(client: client)
+      {:ok,
+       [
+         %{id: "p-edu", title: "Edu", ancestors: [], depth: 0},
+         %{id: "p-coding", title: "Coding", ancestors: ["Edu"], depth: 1}
+       ]}
+  """
+  @callback list_sources(opts :: keyword()) ::
+              {:ok, [source]} | {:error, :not_connected} | {:error, term()}
 end

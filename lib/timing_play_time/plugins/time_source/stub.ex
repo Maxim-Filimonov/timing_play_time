@@ -12,8 +12,33 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
 
   @behaviour TimingPlayTime.Plugins.TimeSource
 
+  # A fixed 2-level hierarchy for the Source picker (ADR-0014), already in the
+  # flat pre-order-DFS / alpha-within-level shape `list_sources/1` promises.
+  # Every leaf id keeps a prefix `daily_rate/1` matches, so an Activity
+  # created against a picked leaf still earns a simulated rate.
+  @sources [
+    %{id: "dev", title: "Development", ancestors: [], depth: 0},
+    %{id: "coding-app", title: "App", ancestors: ["Development"], depth: 1},
+    %{id: "writing-docs", title: "Docs", ancestors: ["Development"], depth: 1},
+    %{id: "move", title: "Exercise", ancestors: [], depth: 0},
+    %{id: "exercise-walk", title: "Walking", ancestors: ["Exercise"], depth: 1},
+    %{id: "learn", title: "Learning", ancestors: [], depth: 0},
+    %{id: "learning-elixir", title: "Elixir", ancestors: ["Learning"], depth: 1}
+  ]
+
   @impl true
-  def connect(_credentials), do: {:ok, :stub_client}
+  def connect(credentials) when is_map(credentials), do: {:ok, :stub_client}
+
+  # A non-map credential is the one way this stub reports a failed connection.
+  # Keeping `connect/1` at the behaviour's full `{:ok, _} | {:error, _}` union
+  # (rather than a body the checker folds to just `{:ok, :stub_client}`) is
+  # also what keeps the `{:error, _}` branch reachable — and warning-free — at
+  # the call sites that dispatch through the `compile_env`'d `@time_source`,
+  # which is this Stub in `:test` but the real Timing adapter in prod.
+  def connect(_credentials), do: {:error, :invalid_credentials}
+
+  @impl true
+  def list_sources(_opts), do: {:ok, @sources}
 
   @impl true
   def get_elapsed_minutes(activities, opts \\ [])

@@ -365,4 +365,95 @@ defmodule TimingPlayTime.Plugins.TimeSource.TimingTest do
       )
     end
   end
+
+  defp project(self, title, opts \\ []) do
+    parent = Keyword.get(opts, :parent)
+
+    %{
+      "self" => self,
+      "title" => title,
+      "is_archived" => Keyword.get(opts, :archived, false),
+      "parents" =>
+        if(parent, do: [%{"self" => elem(parent, 0), "title" => elem(parent, 1)}], else: []),
+      "children" => []
+    }
+  end
+
+  describe "list_sources/1" do
+    test "returns :not_connected without calling the client when no client is given" do
+      assert {:error, :not_connected} = Timing.list_sources([])
+    end
+
+    test "issues exactly one list_projects call, with no arguments (archived excluded by default)" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), projects: []}],
+        fn client ->
+          assert {:ok, []} = Timing.list_sources(client: client)
+
+          assert_receive {:call_tool, "list_projects", args}
+          assert args == %{}
+          refute_receive {:call_tool, _, _}
+        end
+      )
+    end
+
+    test "reconstructs ancestors/depth by walking parents[0] across the flat result" do
+      projects = [
+        project("edu", "Edu"),
+        project("coding", "Coding", parent: {"edu", "Edu"})
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), projects: projects}],
+        fn client ->
+          assert {:ok,
+                  [
+                    %{id: "edu", title: "Edu", ancestors: [], depth: 0},
+                    %{id: "coding", title: "Coding", ancestors: ["Edu"], depth: 1}
+                  ]} = Timing.list_sources(client: client)
+        end
+      )
+    end
+
+    test "emits pre-order DFS, siblings alphabetical (case-insensitive) by title within a level" do
+      projects = [
+        project("schs", "SCHS"),
+        project("admin", "Admin"),
+        project("meet", "Meetings", parent: {"schs", "SCHS"}),
+        project("dev", "Dev", parent: {"schs", "SCHS"})
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), projects: projects}],
+        fn client ->
+          assert {:ok, sources} = Timing.list_sources(client: client)
+          assert Enum.map(sources, & &1.id) == ["admin", "schs", "dev", "meet"]
+          assert Enum.map(sources, & &1.depth) == [0, 0, 1, 1]
+        end
+      )
+    end
+
+    test "excludes archived sources" do
+      projects = [
+        project("keep", "Keep"),
+        project("gone", "Gone", archived: true)
+      ]
+
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), projects: projects}],
+        fn client ->
+          assert {:ok, [%{id: "keep"}]} = Timing.list_sources(client: client)
+        end
+      )
+    end
+
+    test "propagates an upstream tool error rather than returning an empty list" do
+      MockServer.with_server(
+        [handler: TimingMockHandler, state: %{test_pid: self(), error: "boom"}],
+        fn client ->
+          assert {:error, {:tool_error, "boom"}} = Timing.list_sources(client: client)
+        end
+      )
+    end
+  end
 end

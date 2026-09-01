@@ -153,6 +153,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Stub do
           id: id,
           name: Map.fetch!(attrs, :name),
           time_source_identifier: Map.fetch!(attrs, :time_source_identifier),
+          time_source_label: Map.get(attrs, :time_source_label),
           multiplier: Map.fetch!(attrs, :multiplier),
           effect: effect,
           activated_at: activated_at,
