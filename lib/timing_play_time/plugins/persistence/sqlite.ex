@@ -219,6 +219,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite do
       id: activity.id,
       name: activity.name,
       time_source_identifier: activity.time_source_identifier,
+      time_source_label: activity.time_source_label,
       multiplier: activity.multiplier,
       effect: activity.effect,
       activated_at: activity.activated_at

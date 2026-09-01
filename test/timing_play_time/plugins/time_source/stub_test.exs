@@ -74,4 +74,46 @@ defmodule TimingPlayTime.Plugins.TimeSource.StubTest do
              ]
     end
   end
+
+  describe "list_sources/1" do
+    test "returns the fixed 2-level hierarchy, flat and in pre-order DFS (alpha within a level)" do
+      assert {:ok, sources} = Stub.list_sources([])
+
+      assert sources == [
+               %{id: "dev", title: "Development", ancestors: [], depth: 0},
+               %{id: "coding-app", title: "App", ancestors: ["Development"], depth: 1},
+               %{id: "writing-docs", title: "Docs", ancestors: ["Development"], depth: 1},
+               %{id: "move", title: "Exercise", ancestors: [], depth: 0},
+               %{id: "exercise-walk", title: "Walking", ancestors: ["Exercise"], depth: 1},
+               %{id: "learn", title: "Learning", ancestors: [], depth: 0},
+               %{id: "learning-elixir", title: "Elixir", ancestors: ["Learning"], depth: 1}
+             ]
+    end
+
+    test "every leaf id keeps a prefix daily_rate/1 matches, so it still earns a rate" do
+      {:ok, sources} = Stub.list_sources([])
+      to = ~U[2026-07-02 00:00:00Z]
+      from = ~U[2026-07-01 00:00:00Z]
+
+      leaf_rates =
+        for %{id: id, depth: 1} <- sources, into: %{} do
+          activity = %{time_source_identifier: id, activated_at: from}
+          {:ok, totals} = Stub.get_elapsed_minutes([activity], to: to, today_from: from)
+          {id, totals[id].cumulative}
+        end
+
+      assert leaf_rates == %{
+               "coding-app" => 45.0,
+               "writing-docs" => 30.0,
+               "exercise-walk" => 36.0,
+               "learning-elixir" => 42.0
+             }
+    end
+
+    test "ignores opts and never errors" do
+      assert {:ok, _} = Stub.list_sources([])
+      assert {:ok, sources} = Stub.list_sources(client: :anything)
+      assert length(sources) == 7
+    end
+  end
 end

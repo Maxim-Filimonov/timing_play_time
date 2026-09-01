@@ -17,6 +17,12 @@ defmodule TimingPlayTime.Support.TimingMockHandler do
       state[:raw_text] ->
         %{"content" => [%{"type" => "text", "text" => state.raw_text}]}
 
+      tool_name == "list_projects" ->
+        # Mirrors the real server's one-shot `list_projects` wrapper. `state[:projects]`
+        # rows follow the observed live shape: bare `self`, `title`, `is_archived`,
+        # and `parents` as a (plural) array of `%{"self", "title"}` refs.
+        text_content(%{"projects" => state[:projects] || [], "teams" => []})
+
       true ->
         entries =
           state[:entries]
@@ -25,20 +31,12 @@ defmodule TimingPlayTime.Support.TimingMockHandler do
           |> sort_desc_by_start_date()
           |> Enum.take(@page_size_limit)
 
-        %{
-          "content" => [
-            %{
-              "type" => "text",
-              "text" =>
-                Jason.encode!(%{
-                  "time_entries" => entries,
-                  "projects" => [],
-                  "teams" => []
-                })
-            }
-          ]
-        }
+        text_content(%{"time_entries" => entries, "projects" => [], "teams" => []})
     end
+  end
+
+  defp text_content(payload) do
+    %{"content" => [%{"type" => "text", "text" => Jason.encode!(payload)}]}
   end
 
   # Simulates the real Timing server's start_date_min/max filtering, so tests

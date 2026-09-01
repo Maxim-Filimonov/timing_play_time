@@ -805,4 +805,226 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
       assert {:ok, %{effect: :positive}} = PersistenceStub.get_activity(user.id, activity.id)
     end
   end
+
+  describe "Source picker (ADR-0014)" do
+    # The Stub's list_sources/1 fixture (see TimeSource.Stub): a 2-level tree
+    # whose leaf ids keep rate-matching prefixes. "Development → App" is id
+    # "coding-app"; "Learning → Elixir" is "learning-elixir".
+    setup %{user: user} do
+      {:ok, _integration} =
+        Accounts.upsert_integration(user, %{
+          provider: "timing",
+          credentials: %{"api_key" => "test-key"}
+        })
+
+      :ok
+    end
+
+    defp open_dashboard(conn) do
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_async(view)
+      view
+    end
+
+    test "with no integration the picker is a plain manual id field, no dropdown" do
+      {:ok, other} = Accounts.create_user()
+      {:ok, other} = Accounts.update_timezone(other, "Pacific/Auckland")
+      conn = log_in_user(Phoenix.ConnTest.build_conn(), other)
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ ~s(placeholder="paste a Source ID")
+      refute html =~ "Search Sources"
+    end
+
+    test "once sources load, the add form's picker filters and a pick stores the bare id + label snapshot",
+         %{conn: conn, user: user} do
+      view = open_dashboard(conn)
+
+      assert render(view) =~ ~s(placeholder="Search Sources…")
+
+      view
+      |> element("#source-picker-new input[phx-keyup=filter]")
+      |> render_keyup(%{"key" => "p", "value" => "app"})
+
+      html = render(view)
+      assert html =~ "App"
+      refute html =~ ">Elixir<"
+
+      view
+      |> element(~s(#source-picker-new button[phx-value-id="coding-app"]))
+      |> render_click()
+
+      view
+      |> form("form[phx-submit=create_activity]", %{"name" => "My coding", "multiplier" => "1.5"})
+      |> render_submit()
+
+      assert {:ok, [activity]} = PersistenceStub.list_activities(user.id)
+      assert activity.time_source_identifier == "coding-app"
+      assert activity.time_source_label == "Development → App"
+      assert activity.name == "My coding"
+    end
+
+    test "a blank Name on the add form is prefilled with the picked Source's leaf title", %{
+      conn: conn,
+      user: user
+    } do
+      view = open_dashboard(conn)
+
+      view
+      |> element("#source-picker-new input[phx-keyup=filter]")
+      |> render_keyup(%{"key" => "x", "value" => "elixir"})
+
+      view
+      |> element(~s(#source-picker-new button[phx-value-id="learning-elixir"]))
+      |> render_click()
+
+      view
+      |> form("form[phx-submit=create_activity]", %{"name" => "", "multiplier" => "1.0"})
+      |> render_submit()
+
+      assert {:ok, [activity]} = PersistenceStub.list_activities(user.id)
+      assert activity.name == "Elixir"
+      assert activity.time_source_label == "Learning → Elixir"
+    end
+
+    test "a zero-match filter offers the manual-entry escape hatch", %{conn: conn} do
+      view = open_dashboard(conn)
+
+      view
+      |> element("#source-picker-new input[phx-keyup=filter]")
+      |> render_keyup(%{"key" => "z", "value" => "zzzznope"})
+
+      assert render(view) =~ "No match"
+    end
+
+    test "editing an Activity whose stored id matches a Source preselects the picker, and Name is untouched",
+         %{conn: conn, user: user} do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Keep this name",
+          time_source_identifier: "coding-app",
+          time_source_label: "Development → App",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      view = open_dashboard(conn)
+      html = render_click(view, "edit_activity", %{"id" => activity.id})
+
+      assert html =~ ~s(value="Development → App")
+
+      view
+      |> form("form[phx-submit=save_activity]", %{"name" => "Keep this name"})
+      |> render_submit()
+
+      assert {:ok, saved} = PersistenceStub.get_activity(user.id, activity.id)
+      assert saved.name == "Keep this name"
+      assert saved.time_source_label == "Development → App"
+    end
+
+    test "editing an Activity whose stored id matches nothing opens the picker in manual mode showing that id",
+         %{conn: conn, user: user} do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Legacy",
+          time_source_identifier: "some-old-id",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      view = open_dashboard(conn)
+      html = render_click(view, "edit_activity", %{"id" => activity.id})
+
+      assert html =~ ~s(value="some-old-id")
+      assert html =~ ~s(placeholder="paste a Source ID")
+    end
+
+    test "a manual-mode edit that doesn't retype the id keeps the stored label snapshot (ADR-0014)",
+         %{conn: conn, user: user} do
+      {:ok, activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Renamed upstream",
+          time_source_identifier: "id-since-renamed",
+          time_source_label: "Old Parent → Old Leaf",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      view = open_dashboard(conn)
+      render_click(view, "edit_activity", %{"id" => activity.id})
+
+      # touch only the multiplier, then save — the Source field is untouched
+      render_click(view, "increment_multiplier", %{})
+
+      view
+      |> form("form[phx-submit=save_activity]", %{"name" => "Renamed upstream"})
+      |> render_submit()
+
+      assert {:ok, saved} = PersistenceStub.get_activity(user.id, activity.id)
+      assert saved.time_source_label == "Old Parent → Old Leaf"
+      assert saved.time_source_identifier == "id-since-renamed"
+    end
+
+    test "the Add form can't be submitted in picker mode with nothing selected", %{conn: conn} do
+      view = open_dashboard(conn)
+
+      html =
+        view
+        |> form("form[phx-submit=create_activity]", %{"name" => "No source", "multiplier" => "1.0"})
+        |> render_submit()
+
+      assert html =~ "Pick a Source"
+    end
+
+    test "after a pick, re-opening the dropdown still shows the source (the '→' path isn't a dead filter)",
+         %{conn: conn} do
+      view = open_dashboard(conn)
+
+      view
+      |> element("#source-picker-new input[phx-keyup=filter]")
+      |> render_keyup(%{"key" => "p", "value" => "app"})
+
+      view
+      |> element(~s(#source-picker-new button[phx-value-id="coding-app"]))
+      |> render_click()
+
+      # the field now holds "Development → App"; a keyup with that value
+      # (as happens on the next focus/keystroke) must not wipe the list
+      html =
+        view
+        |> element("#source-picker-new input[phx-keyup=filter]")
+        |> render_keyup(%{"key" => "p", "value" => "Development → App"})
+
+      assert html =~ ">App<"
+      refute html =~ "No match"
+    end
+
+    test "the Activity card shows the label snapshot, or the bare id when there's no label", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _labelled} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Labelled",
+          time_source_identifier: "coding-app",
+          time_source_label: "Development → App",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      {:ok, _bare} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Bare",
+          time_source_identifier: "raw-id-only",
+          multiplier: 1.0,
+          activated_at: DateTime.add(DateTime.utc_now(), -3, :day)
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ "Development → App"
+      assert html =~ "raw-id-only"
+    end
+  end
 end

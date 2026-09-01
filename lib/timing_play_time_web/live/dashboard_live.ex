@@ -9,6 +9,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   alias TimingPlayTime.Accounts
   alias TimingPlayTime.LocalDay
   alias TimingPlayTimeWeb.EffectColors
+  alias TimingPlayTimeWeb.SourcePickerComponent
 
   @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
@@ -83,6 +84,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> assign(:editing_activity_id, nil)
       |> assign(:editing_multiplier, nil)
       |> assign(:pending_activity, nil)
+      |> assign(:source_list, :loading)
 
     # The static (disconnected) render has no client to query Timing with, so
     # fetching would fail and silently score every Activity as 0 (per
@@ -97,12 +99,43 @@ defmodule TimingPlayTimeWeb.DashboardLive do
 
         socket
         |> open_time_source_connection()
+        |> maybe_load_sources()
         |> refresh_timing_data()
       else
         socket
       end
 
     {:ok, socket}
+  end
+
+  # Fetches the Source picker's list once, off the mount critical path
+  # (ADR-0014 / ADR-0009): only when an Integration connection was opened,
+  # and via `start_async` so `list_sources/1`'s network round-trip never
+  # blocks the first render. No connection → `:no_integration`, and the
+  # picker opens straight into manual-id entry.
+  defp maybe_load_sources(socket) do
+    case socket.assigns.client do
+      nil ->
+        assign(socket, :source_list, :no_integration)
+
+      client ->
+        start_async(socket, :load_sources, fn ->
+          @time_source.list_sources(client: client)
+        end)
+    end
+  end
+
+  @impl true
+  def handle_async(:load_sources, {:ok, {:ok, sources}}, socket) do
+    {:noreply, assign(socket, :source_list, {:ok, sources})}
+  end
+
+  def handle_async(:load_sources, {:ok, {:error, _reason}}, socket) do
+    {:noreply, assign(socket, :source_list, :error)}
+  end
+
+  def handle_async(:load_sources, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, :source_list, :error)}
   end
 
   @impl true
@@ -259,6 +292,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     attrs = %{
       name: name,
       time_source_identifier: time_source_identifier,
+      time_source_label: source_label(params),
       multiplier: socket.assigns.editing_multiplier,
       effect: effect
     }
@@ -285,10 +319,17 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     effect = parse_effect(Map.get(params, "effect", "positive"))
 
     case Float.parse(multiplier_str) do
+      {_multiplier, _} when time_source_identifier in ["", nil] ->
+        {:noreply,
+         put_flash(socket, :error, ~s(Pick a Source, or switch to "enter ID manually".))}
+
       {multiplier, _} ->
+        label = source_label(params)
+
         attrs = %{
-          name: name,
+          name: prefill_name(name, label),
           time_source_identifier: time_source_identifier,
+          time_source_label: label,
           multiplier: multiplier,
           effect: effect
         }
@@ -345,6 +386,26 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # atoms, anything else is treated as :positive (#10, ADR-0013).
   defp parse_effect(effect) when effect in ["negative", :negative], do: :negative
   defp parse_effect(_effect), do: :positive
+
+  # The Source picker's label snapshot (ADR-0014). Blank in manual-id entry
+  # mode (and pre-picker Activities) — normalised to nil so the card falls
+  # back to the bare id.
+  defp source_label(params) do
+    case String.trim(Map.get(params, "time_source_label", "")) do
+      "" -> nil
+      label -> label
+    end
+  end
+
+  # Add form only: an empty Name is filled with the picked Source's leaf
+  # title (ADR-0014). Edit never reaches here — it keeps whatever Name it had.
+  defp prefill_name(name, label) do
+    if String.trim(name) == "" and is_binary(label) do
+      label |> String.split(" → ") |> List.last()
+    else
+      name
+    end
+  end
 
   # The Effect "crossing" that needs confirming: the result is a drain and
   # the prior state was not (ADR-0013 — confirm the crossing, not every

@@ -46,6 +46,30 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   end
 
   @impl true
+  def list_sources(opts \\ []) do
+    case Keyword.get(opts, :client) do
+      nil -> {:error, :not_connected}
+      client -> do_list_sources(client)
+    end
+  end
+
+  # One `list_projects` call returns every non-archived project (no
+  # pagination, no `include_archived` needed — archived is excluded by
+  # default). `list_projects` gives only the immediate `parents[0]` per row,
+  # never a full ancestor chain, so `to_sources/1` rebuilds `ancestors` /
+  # `depth` by walking parent links across the flat result (research #27).
+  defp do_list_sources(client) do
+    with {:ok, response} <- ExMCP.Client.call_tool(client, "list_projects", %{}),
+         {:ok, decoded} <- decode_tool_result(response) do
+      {:ok, decoded |> projects_from() |> to_sources()}
+    else
+      {:error, reason} = error ->
+        Logger.warning("Timing.list_sources: list_projects call failed: #{inspect(reason)}")
+        error
+    end
+  end
+
+  @impl true
   def get_elapsed_minutes(activities, opts \\ [])
 
   def get_elapsed_minutes([], _opts), do: {:ok, %{}}
@@ -280,27 +304,84 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
     end
   end
 
-  defp extract_entries(%ExMCP.Response{is_error: true} = response) do
+  defp extract_entries(response) do
+    with {:ok, decoded} <- decode_tool_result(response), do: {:ok, entries_from(decoded)}
+  end
+
+  # Unwraps an ExMCP tool response to its decoded payload (structured output,
+  # or the JSON text block), or an error tuple — shared by `list_time_entries`
+  # and `list_projects` unwrapping.
+  defp decode_tool_result(%ExMCP.Response{is_error: true} = response) do
     {:error, {:tool_error, ExMCP.Response.text_content(response)}}
   end
 
-  defp extract_entries(%ExMCP.Response{structuredOutput: structured})
+  defp decode_tool_result(%ExMCP.Response{structuredOutput: structured})
        when not is_nil(structured) do
-    {:ok, entries_from(structured)}
+    {:ok, structured}
   end
 
-  defp extract_entries(%ExMCP.Response{} = response) do
+  defp decode_tool_result(%ExMCP.Response{} = response) do
     case ExMCP.Response.text_content(response) do
       nil ->
         {:error, :empty_tool_result}
 
       text ->
         case Jason.decode(text) do
-          {:ok, decoded} -> {:ok, entries_from(decoded)}
+          {:ok, decoded} -> {:ok, decoded}
           {:error, reason} -> {:error, {:invalid_tool_result, reason}}
         end
     end
   end
+
+  defp projects_from(%{"projects" => projects}) when is_list(projects), do: projects
+  defp projects_from(projects) when is_list(projects), do: projects
+  defp projects_from(_other), do: []
+
+  # Builds the flat, pre-order-DFS source list the `list_sources/1` contract
+  # promises from Timing's flat `list_projects` rows. `list_projects` gives
+  # only `parents[0]` per row, so each project's `ancestors` is found by
+  # walking parent links up across the flat result. Sorting every project by
+  # its full lowercased title path then yields pre-order DFS with
+  # siblings alphabetical within a level — and, unlike a root-down walk,
+  # can't silently drop a project caught in a parent-link cycle.
+  defp to_sources(projects) do
+    live = Enum.reject(projects, & &1["is_archived"])
+    by_id = Map.new(live, &{&1["self"], &1})
+
+    live
+    |> Enum.map(&source_with_ancestry(&1, by_id))
+    |> Enum.sort_by(& &1.sort_key)
+    |> Enum.map(&Map.delete(&1, :sort_key))
+  end
+
+  defp source_with_ancestry(project, by_id) do
+    ancestors = ancestor_titles(project, by_id, MapSet.new([project["self"]]), [])
+    title = project["title"] || ""
+
+    %{
+      id: project["self"],
+      title: title,
+      ancestors: ancestors,
+      depth: length(ancestors),
+      sort_key: Enum.map(ancestors ++ [title], &String.downcase/1)
+    }
+  end
+
+  # Walks `parents[0]` to the root, root-first. Stops at a parent that is
+  # archived / not in the result, and guards against a cycle re-visiting an
+  # id already on the path.
+  defp ancestor_titles(project, by_id, seen, acc) do
+    with sid when is_binary(sid) <- raw_parent_id(project),
+         false <- MapSet.member?(seen, sid),
+         %{} = parent <- Map.get(by_id, sid) do
+      ancestor_titles(parent, by_id, MapSet.put(seen, sid), [parent["title"] || "" | acc])
+    else
+      _ -> acc
+    end
+  end
+
+  defp raw_parent_id(%{"parents" => [%{"self" => sid} | _]}), do: sid
+  defp raw_parent_id(_project), do: nil
 
   defp entries_from(%{"time_entries" => entries}) when is_list(entries) do
     Logger.debug(fn -> "Timing entries_from: matched %{\"time_entries\" => list} shape" end)

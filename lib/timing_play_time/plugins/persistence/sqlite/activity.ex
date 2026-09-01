@@ -8,6 +8,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite.Activity do
   schema "activities" do
     field :name, :string
     field :time_source_identifier, :string
+    field :time_source_label, :string
     field :multiplier, :float
     field :effect, Ecto.Enum, values: [:positive, :negative], default: :positive
     field :activated_at, :utc_datetime
@@ -22,7 +23,7 @@ defmodule TimingPlayTime.Plugins.Persistence.Sqlite.Activity do
   # `"negative"` string (or atom) to the atom and adds a changeset error for
   # anything else, for free.
   @required [:name, :time_source_identifier, :multiplier, :activated_at, :user_id]
-  @optional [:effect]
+  @optional [:effect, :time_source_label]
 
   def changeset(activity, attrs) do
     activity

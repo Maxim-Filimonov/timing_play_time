@@ -45,7 +45,11 @@ defmodule TimingPlayTime.Plugins.Persistence do
   ## Parameters
     * `attrs` - Map containing:
       * `:name` - Activity name (required)
-      * `:time_source_identifier` - Timing project ID (required)
+      * `:time_source_identifier` - the picked Source's id (required)
+      * `:time_source_label` - the picked Source's flattened path label,
+        e.g. `"Edu → Coding"` (optional string, nullable; a pick-time
+        snapshot, never auto-refreshed — ADR-0014). Absent/`nil` in manual
+        entry mode and for Activities created before the picker existed.
       * `:multiplier` - Multiplier magnitude (required, float, must be > 0);
         an unsigned magnitude — direction lives in `:effect` (ADR-0013)
       * `:effect` - `:positive | :negative` (optional, defaults to
