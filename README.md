@@ -19,6 +19,16 @@ mix phx.server
 
 Then visit [`localhost:4000`](http://localhost:4000) and set your timezone/Timing API key at `/settings` (timezone is also auto-detected from your browser on first visit).
 
+### Auth0 dev tenant (optional email linking — WIP)
+
+The optional email-linking feature (map [#20](https://github.com/Maxim-Filimonov/timing_play_time/issues/20)) needs each developer to have their own Auth0 dev tenant restricted to passwordless email. Run:
+
+```
+scripts/auth0-dev-setup.sh
+```
+
+It walks you through creating the tenant and application, locking it to the passwordless email (one-time code) connection, and writes `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, and `AUTH0_CALLBACK_URL` to a gitignored `.env`. The anonymous-first flow never touches Auth0, so this is only needed to work on the login/link paths.
+
 Learn more about the underlying Phoenix framework:
 
   * Official website: https://www.phoenixframework.org/
