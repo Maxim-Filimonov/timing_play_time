@@ -43,6 +43,9 @@ defmodule TimingPlayTimeWeb.Router do
 
       live_dashboard "/dashboard", metrics: TimingPlayTimeWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+
+      # THROWAWAY — wayfinder #28 source-picker prototype. Remove with the ticket.
+      live "/proto/source-picker", TimingPlayTimeWeb.ProtoSourcePickerLive
     end
   end
 end
