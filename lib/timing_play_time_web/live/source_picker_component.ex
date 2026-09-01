@@ -213,15 +213,45 @@ defmodule TimingPlayTimeWeb.SourcePickerComponent do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id={@id}>
-      <div class="flex items-baseline justify-between mb-2">
+    <div id={@id} class="source-picker">
+      <%!-- Scoped, build-free styling for the dropdown: the structural rules
+            (left-align, one line per row, scroll, spacing) must not depend on
+            whether Tailwind has recompiled `app.css` for this component. --%>
+      <style>
+        .source-picker .sp-anchor { position: relative; }
+        .source-picker .sp-label-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .5rem; }
+        .source-picker .sp-toggle { font-size: .75rem; font-weight: 500; color: #9333ea; text-decoration: underline; }
+        .source-picker .sp-toggle:hover { color: #6b21a8; }
+        .source-picker .sp-menu {
+          position: absolute; left: 0; top: 100%; z-index: 30; margin-top: .25rem;
+          min-width: 100%; width: max-content; max-width: 22rem;
+          max-height: 15rem; overflow-y: auto; overscroll-behavior: contain;
+          background: #fff; border: 1px solid #f3d1e3; border-radius: .75rem;
+          padding: .25rem 0;
+          box-shadow: 0 12px 24px -8px rgb(0 0 0 / .18);
+        }
+        .source-picker .sp-row {
+          display: block; width: 100%; box-sizing: border-box;
+          padding: .4rem .75rem; text-align: left;
+          font-size: .8125rem; line-height: 1.3;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .source-picker .sp-row + .sp-row { border-top: 1px solid #f6ecf2; }
+        .source-picker .sp-row:hover { background: #fdf2f8; }
+        .source-picker .sp-anc { color: #9ca3af; }
+        .source-picker .sp-leaf { font-weight: 600; color: #111827; }
+        .source-picker .sp-empty { padding: .55rem .75rem; font-size: .8125rem; color: #6b7280; }
+        .source-picker .sp-empty a { color: #9333ea; text-decoration: underline; cursor: pointer; }
+      </style>
+
+      <div class="sp-label-row">
         <label class="block text-sm font-semibold text-gray-700">Source</label>
         <button
           :if={@load_state == :ready}
           type="button"
           phx-click={if @mode == :picker, do: "to_manual", else: "to_picker"}
           phx-target={@myself}
-          class="text-xs font-medium text-purple-600 hover:text-purple-800 underline"
+          class="sp-toggle"
         >
           {if @mode == :picker, do: "enter ID manually", else: "back to picker"}
         </button>
@@ -248,7 +278,7 @@ defmodule TimingPlayTimeWeb.SourcePickerComponent do
         </p>
       </div>
 
-      <div :if={@mode == :picker} phx-click-away="close_dropdown" phx-target={@myself} class="relative">
+      <div :if={@mode == :picker} phx-click-away="close_dropdown" phx-target={@myself} class="sp-anchor">
         <input
           type="text"
           value={@query}
@@ -262,20 +292,10 @@ defmodule TimingPlayTimeWeb.SourcePickerComponent do
         />
         <input type="hidden" name="time_source_identifier" value={@selected_id || ""} />
 
-        <div
-          :if={@open and @load_state == :ready}
-          class="absolute left-0 z-20 mt-1 min-w-full w-max max-w-sm max-h-64 overflow-y-auto rounded-xl border-2 border-pink-200 bg-white py-1 shadow-xl"
-        >
-          <div :if={@results == []} class="px-3 py-2 text-sm text-gray-500">
+        <div :if={@open and @load_state == :ready} class="sp-menu">
+          <div :if={@results == []} class="sp-empty">
             No match —
-            <button
-              type="button"
-              phx-click="to_manual"
-              phx-target={@myself}
-              class="text-purple-600 underline"
-            >
-              enter ID manually
-            </button>.
+            <a phx-click="to_manual" phx-target={@myself}>enter ID manually</a>.
           </div>
           <button
             :for={source <- @results}
@@ -284,9 +304,9 @@ defmodule TimingPlayTimeWeb.SourcePickerComponent do
             phx-value-id={source.id}
             phx-target={@myself}
             title={path_string(source)}
-            class="block w-full truncate px-3 py-1.5 text-left text-sm leading-tight hover:bg-pink-50"
+            class="sp-row"
           >
-            <span :if={source.ancestors != []} class="text-gray-400">{Enum.join(source.ancestors, " → ")} → </span><span class="font-semibold text-gray-900">{source.title}</span>
+            <span :if={source.ancestors != []} class="sp-anc">{Enum.join(source.ancestors, " → ")} → </span><span class="sp-leaf">{source.title}</span>
           </button>
         </div>
       </div>
