@@ -35,3 +35,6 @@ timing_play_time-*.tar
 
 # Local tool version manager state (mise)
 .mise-*
+
+# Local secrets (Auth0 dev tenant, etc.) — never commit
+.env
