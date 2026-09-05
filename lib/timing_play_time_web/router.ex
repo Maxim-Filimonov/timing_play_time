@@ -24,6 +24,14 @@ defmodule TimingPlayTimeWeb.Router do
     end
   end
 
+  scope "/auth", TimingPlayTimeWeb do
+    pipe_through :browser
+
+    get "/link", AuthController, :link
+    get "/login", AuthController, :login
+    get "/callback", AuthController, :callback
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", TimingPlayTimeWeb do
   #   pipe_through :api

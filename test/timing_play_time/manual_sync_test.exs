@@ -12,7 +12,8 @@ defmodule TimingPlayTime.ManualSyncTest do
 
   describe "get_total/1" do
     test "returns 0.0 when no manual sync has been set", %{user_id: user_id} do
-      assert {:ok, 0.0} = ManualSync.get_total(user_id)
+      assert {:ok, total} = ManualSync.get_total(user_id)
+      assert total == 0.0
     end
 
     test "returns the current manual sync total", %{user_id: user_id} do
@@ -42,8 +43,10 @@ defmodule TimingPlayTime.ManualSyncTest do
 
     test "accepts zero", %{user_id: user_id} do
       {:ok, _} = ManualSync.set_total(user_id, 100.0)
-      assert {:ok, 0.0} = ManualSync.set_total(user_id, 0.0)
-      assert {:ok, 0.0} = ManualSync.get_total(user_id)
+      assert {:ok, set} = ManualSync.set_total(user_id, 0.0)
+      assert set == 0.0
+      assert {:ok, total} = ManualSync.get_total(user_id)
+      assert total == 0.0
     end
   end
 end

@@ -5,8 +5,16 @@ Converts real-world time spent on worthwhile activities (tracked in the Timing a
 ## Language
 
 **User**:
-The tenant boundary. Owns Activities, the Play Balance, an Integration, and a timezone. Identity is an anonymous, long-lived session cookie (see [ADR-0006](docs/adr/0006-multi-tenant-anonymous-cookie-accounts.md)) — there is no login, password, or email attached to a User; losing the cookie means losing access to that User's data.
-_Avoid_: Account, tenant (User is this app's term; "account" implies a login credential that doesn't exist here)
+The tenant boundary. Owns Activities, the Play Balance, an Integration, a timezone, and optionally a Linked Email. Identity is an anonymous, long-lived session cookie (see [ADR-0006](docs/adr/0006-multi-tenant-anonymous-cookie-accounts.md)); `users.id` is the sole identity and nothing foreign-keys to anything else. A User may optionally attach one verified Linked Email for cross-device access and recovery from cookie loss (see [ADR-0015](docs/adr/0015-optional-email-linking-via-auth0-passwordless.md)) — the identity join key for that is `auth0_sub`, not the email. Without a Linked Email, losing the cookie still means losing access to that User's data. There is still no logged-out state: clearing the cookie silently provisions a fresh empty User, not a login screen.
+_Avoid_: Account, tenant (User is this app's term; "account" carries connotations — billing, roles, a mandatory credential — that still don't apply, even though an optional Linked Email now can)
+
+**Linked Email**:
+An email address a User has optionally attached to their identity, for cross-device access and recovery from session-cookie loss (see [ADR-0015](docs/adr/0015-optional-email-linking-via-auth0-passwordless.md)). Opt-in from Settings; verified once via an Auth0 passwordless Login Code. Stored on the User as a denormalised display copy (`email`) beside `auth0_sub` — the real identity join key — and never used for lookup. Once attached it is **permanent**: v1 has no in-app unlink and no in-app change-email, because Auth0 cannot change the email on a passwordless identity (a different address is a different `auth0_sub`, hence a different User under the switch-never-merge collision policy). An email already attached to another User is refused, not transferred. Surfaced only as a read-only masked status line in Settings; re-synced from the Auth0 identity (same `auth0_sub` only) on each login.
+_Avoid_: Account email, login email (it is a recovery credential, not a username — the app still has no username); verified email (verification is a one-time gate, not a stored attribute)
+
+**Login Code**:
+The one-time numeric code Auth0 emails during a link or sign-in flow, entered on Auth0's hosted Universal Login page — never in this app's own UI (see [ADR-0015](docs/adr/0015-optional-email-linking-via-auth0-passwordless.md)). A code rather than a magic link because the flow's purpose is cross-device: a link mailed to a phone opens on the phone — the device you are signing in *from*, not *to* — whereas a code is transcribable across devices. Validity, single-use, and attempt limits are Auth0's to enforce, not this app's.
+_Avoid_: Magic link (deliberately not used), OTP (Auth0's term — Login Code is this app's), verification code
 
 **Integration**:
 A User's connection to one external time-tracking provider at a time (currently only Timing), holding provider-specific encrypted credentials (see [ADR-0007](docs/adr/0007-generic-per-user-integration-credentials.md)). Replaces what was previously a single global Timing API key shared by the whole app.

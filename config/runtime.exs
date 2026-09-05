@@ -1,5 +1,10 @@
 import Config
 
+# Loads dev's Auth0 credentials from a gitignored `.env` (written by
+# `scripts/auth0-dev-setup.sh`); a no-op when the file is absent (CI, prod,
+# where the same-named env vars are set directly).
+Dotenvy.source!([".env", System.get_env()])
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
@@ -23,6 +28,32 @@ end
 # TIMING_API_KEY and TZ were required boot-time env vars here before ADR-0006/
 # ADR-0007 — both are now per-user (Integration credentials, users.timezone)
 # instead of app-wide config, so there's nothing to read at boot anymore.
+
+# Auth0 (ADR-0014) is wired for :dev and :prod only — :test selects the
+# IdentityProvider Stub (config/test.exs) and never touches Auth0. In :prod a
+# missing var raises (matching SECRET_KEY_BASE's pattern below); in :dev it's
+# left nil, which the app boots fine with — the link/login buttons just yield
+# the generic failure until `.env` (scripts/auth0-dev-setup.sh) is filled in.
+if config_env() in [:dev, :prod] do
+  auth0_var = fn name ->
+    case config_env() do
+      :prod ->
+        System.get_env(name) ||
+          raise """
+          environment variable #{name} is missing.
+          """
+
+      :dev ->
+        System.get_env(name)
+    end
+  end
+
+  config :timing_play_time, TimingPlayTime.Plugins.IdentityProvider.Auth0,
+    domain: auth0_var.("AUTH0_DOMAIN"),
+    client_id: auth0_var.("AUTH0_CLIENT_ID"),
+    client_secret: auth0_var.("AUTH0_CLIENT_SECRET"),
+    redirect_uri: auth0_var.("AUTH0_CALLBACK_URL")
+end
 
 if config_env() == :prod do
   database_path =

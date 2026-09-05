@@ -60,6 +60,98 @@
         </form>
       </div>
 
+      <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-indigo-200">
+        <h2 class="text-xl font-bold text-gray-900 mb-4">🔑 Sign-in & devices</h2>
+
+        <%= if @current_user.auth0_sub do %>
+          <p class="text-green-700 font-semibold mb-1">
+            {mask_email(@linked_email)} ✓
+          </p>
+          <p class="text-gray-500 text-xs mb-4">Changing or removing this isn't available.</p>
+
+          <button
+            type="button"
+            onclick={"document.getElementById('switch-account-dialog-linked').showModal()"}
+            class="text-indigo-700 hover:text-indigo-900 text-sm font-semibold underline"
+          >
+            Sign in as someone else
+          </button>
+
+          <dialog id="switch-account-dialog-linked" class="rounded-2xl p-6 shadow-2xl backdrop:bg-black/40 max-w-sm">
+            <p class="text-gray-900 font-semibold mb-2">Your current play time isn't deleted.</p>
+            <p class="text-gray-600 text-sm mb-6">
+              You can come back anytime by signing in with {mask_email(@linked_email)}.
+            </p>
+            <div class="flex gap-3 justify-end">
+              <button
+                type="button"
+                onclick={"document.getElementById('switch-account-dialog-linked').close()"}
+                class="text-gray-500 hover:text-gray-700 text-sm font-semibold px-4 py-2"
+              >
+                Cancel
+              </button>
+              <a
+                href={~p"/auth/login"}
+                class="bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold text-sm py-2 px-4 rounded-xl"
+              >
+                Sign in as someone else
+              </a>
+            </div>
+          </dialog>
+        <% else %>
+          <p class="text-gray-600 mb-4 text-sm">
+            Link an email so you can get back to this Playtime on another device, or after
+            losing this browser's cookie.
+          </p>
+
+          <div class="flex gap-4 items-center">
+            <a
+              href={~p"/auth/link"}
+              class="bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold py-3 px-6 rounded-xl hover:from-indigo-600 hover:to-purple-600 transition-all duration-200 shadow-lg hover:shadow-xl"
+            >
+              Link an email
+            </a>
+            <span class="text-gray-400 text-sm">or</span>
+            <button
+              type="button"
+              onclick={"document.getElementById('switch-account-dialog-unlinked').showModal()"}
+              class="text-indigo-700 hover:text-indigo-900 text-sm font-semibold underline"
+            >
+              Already linked? Sign in here
+            </button>
+          </div>
+
+          <dialog id="switch-account-dialog-unlinked" class="rounded-2xl p-6 shadow-2xl backdrop:bg-black/40 max-w-sm">
+            <p class="text-gray-900 font-semibold mb-2">Your current play time isn't deleted.</p>
+            <p class="text-gray-600 text-sm mb-6">
+              Signing in switches this browser to a different Playtime. If you'd rather keep
+              what's here reachable later, link an email to it first.
+            </p>
+            <div class="flex flex-col gap-3">
+              <a
+                href={~p"/auth/link"}
+                class="bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold text-sm text-center py-2 px-4 rounded-xl"
+              >
+                Link an email to this Playtime first
+              </a>
+              <a
+                href={~p"/auth/login"}
+                class="text-red-600 hover:text-red-800 text-sm font-semibold text-center py-2 px-4"
+              >
+                Sign in anyway
+              </a>
+              <button
+                type="button"
+                onclick={"document.getElementById('switch-account-dialog-unlinked').close()"}
+                class="text-gray-500 hover:text-gray-700 text-sm text-center"
+              >
+                Cancel
+              </button>
+            </div>
+          </dialog>
+        <% end %>
+      </div>
+
       <p class="text-center text-xs text-gray-400">Account ID: {@current_user.id}</p>
     </div>
   </div>
