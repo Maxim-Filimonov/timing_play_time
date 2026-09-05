@@ -39,12 +39,12 @@
       <%= if @show_arrival_banner do %>
         <div class="flex items-center justify-between gap-4 rounded-2xl bg-indigo-50 border-2 border-indigo-200 px-5 py-4">
           <p class="text-indigo-900 text-sm">
-            New here — or picking up on a new device? You can sign in to bring back a Playtime
-            you started elsewhere.
+            New here — or picking up on a new device? Continue with an email to link this
+            Playtime or bring back one you started elsewhere.
           </p>
           <div class="flex gap-3 shrink-0">
-            <a href={~p"/auth/login"} class="text-indigo-700 hover:text-indigo-900 text-sm font-semibold underline">
-              Sign in to recover it
+            <a href={~p"/auth/continue"} class="text-indigo-700 hover:text-indigo-900 text-sm font-semibold underline">
+              Continue with email
             </a>
             <button
               type="button"

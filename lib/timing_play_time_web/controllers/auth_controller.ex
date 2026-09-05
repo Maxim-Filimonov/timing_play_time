@@ -32,6 +32,17 @@ defmodule TimingPlayTimeWeb.AuthController do
     start_flow(conn, :login, ~p"/", login_hint: nil)
   end
 
+  def continue(conn, _params) do
+    start_flow(conn, :auth, ~p"/", login_hint: nil)
+  end
+
+  def logout(conn, _params) do
+    conn
+    |> delete_session(:user_id)
+    |> configure_session(renew: true)
+    |> redirect(to: ~p"/")
+  end
+
   defp start_flow(conn, flow, error_redirect, opts) do
     case @identity_provider.authorization_url(Keyword.put(opts, :redirect_uri, callback_url(conn))) do
       {:ok, url, session_params} ->
@@ -51,6 +62,7 @@ defmodule TimingPlayTimeWeb.AuthController do
   def callback(conn, params) do
     case get_session(conn, :auth) do
       nil ->
+        Logger.warning("AuthController.callback: no :auth in session (session missing or lost before Auth0 redirected back)")
         generic_failure(conn, ~p"/")
 
       %{flow: flow, params: session_params} ->
@@ -106,7 +118,42 @@ defmodule TimingPlayTimeWeb.AuthController do
         |> redirect(to: ~p"/")
 
       {:error, :no_user} ->
+        Logger.warning("AuthController.callback(:login): no User found for sub=#{inspect(claims.sub)}")
         generic_failure(conn, ~p"/")
+    end
+  end
+
+  defp handle_verified(conn, :auth, claims) do
+    case Accounts.authenticate_identity(claims) do
+      {:ok, _authed_user} -> handle_verified(conn, :login, claims)
+      {:error, :no_user} -> handle_link_fallback(conn, claims)
+    end
+  end
+
+  defp handle_link_fallback(conn, claims) do
+    case Accounts.link_identity(conn.assigns.current_user, claims) do
+      {:ok, _user} ->
+        conn
+        |> put_flash(:info, "Email linked.")
+        |> redirect(to: ~p"/")
+
+      {:error, :already_linked} ->
+        masked = conn.assigns.current_user.email |> mask_email()
+
+        conn
+        |> put_flash(
+          :error,
+          "This Playtime is already linked to #{masked}. Sign out first if you meant to switch accounts."
+        )
+        |> redirect(to: ~p"/")
+
+      {:error, :identity_taken} ->
+        conn
+        |> put_flash(
+          :error,
+          "That email is already linked to another Playtime, which can't be merged. Try a different email."
+        )
+        |> redirect(to: ~p"/")
     end
   end
 
@@ -117,6 +164,7 @@ defmodule TimingPlayTimeWeb.AuthController do
 
   defp origin_for(:link), do: ~p"/settings"
   defp origin_for(:login), do: ~p"/"
+  defp origin_for(:auth), do: ~p"/"
 
   defp generic_failure(conn, to) do
     conn

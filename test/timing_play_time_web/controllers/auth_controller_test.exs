@@ -34,6 +34,38 @@ defmodule TimingPlayTimeWeb.AuthControllerTest do
       assert redirected_to(conn, 302) =~ "/auth/callback"
       assert %{flow: :login} = get_session(conn, :auth)
     end
+
+    test "continue redirects out to the IdP with a stashed :auth session", %{conn: conn} do
+      {:ok, user} = Accounts.create_user()
+
+      conn = conn |> log_in_user(user) |> get(~p"/auth/continue")
+
+      assert redirected_to(conn, 302) =~ "/auth/callback"
+      assert %{flow: :auth} = get_session(conn, :auth)
+    end
+  end
+
+  describe "logout/2" do
+    test "drops the session so the next request gets a fresh anonymous User", %{conn: conn} do
+      {:ok, user} = Accounts.create_user()
+
+      conn = conn |> log_in_user(user) |> get(~p"/auth/logout")
+
+      assert redirected_to(conn) == ~p"/"
+      assert get_session(conn, :user_id) == nil
+
+      conn = conn |> recycle() |> get(~p"/")
+      assert conn.assigns.current_user.id != user.id
+    end
+
+    test "does not discard a linked-but-empty account being logged out of", %{conn: conn} do
+      {:ok, user} = Accounts.create_user()
+      {:ok, user} = Accounts.link_identity(user, %{sub: "email|abc", email: "a@b.com"})
+
+      conn |> log_in_user(user) |> get(~p"/auth/logout")
+
+      assert Accounts.get_user(user.id) != nil
+    end
   end
 
   describe "callback/2 — anonymous onboarding is unchanged" do
@@ -202,6 +234,59 @@ defmodule TimingPlayTimeWeb.AuthControllerTest do
       assert Phoenix.Flash.get(conn.assigns.flash, :error) == "That didn't complete. Please try again."
       assert get_session(conn, :user_id) == anon.id
       assert Accounts.get_user(anon.id) != nil
+    end
+  end
+
+  describe "callback/2 — unified :auth flow" do
+    test "known identity logs in, same as the login flow", %{conn: conn} do
+      {:ok, linked} = Accounts.create_user()
+      {:ok, linked} = Accounts.link_identity(linked, %{sub: "email|abc", email: "a@b.com"})
+
+      {:ok, anon} = Accounts.create_user()
+      Stub.stub_next_result({:ok, %{sub: "email|abc", email: "a@b.com"}})
+
+      conn =
+        conn
+        |> with_auth_session(anon, :auth)
+        |> get(~p"/auth/callback?code=stub-code&state=the-state")
+
+      assert redirected_to(conn) == ~p"/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Welcome back."
+      assert get_session(conn, :user_id) == linked.id
+      assert Accounts.get_user(anon.id) == nil
+    end
+
+    test "unknown identity falls back to linking the current session's User", %{conn: conn} do
+      {:ok, anon} = Accounts.create_user()
+      Stub.stub_next_result({:ok, %{sub: "email|fresh", email: "fresh@b.com"}})
+
+      conn =
+        conn
+        |> with_auth_session(anon, :auth)
+        |> get(~p"/auth/callback?code=stub-code&state=the-state")
+
+      assert redirected_to(conn) == ~p"/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Email linked."
+
+      updated = Accounts.get_user(anon.id)
+      assert updated.auth0_sub == "email|fresh"
+      assert updated.email == "fresh@b.com"
+    end
+
+    test "already linked to a different email tells the user to sign out first", %{conn: conn} do
+      {:ok, user} = Accounts.create_user()
+      {:ok, user} = Accounts.link_identity(user, %{sub: "email|abc", email: "a@b.com"})
+      Stub.stub_next_result({:ok, %{sub: "email|xyz", email: "new@b.com"}})
+
+      conn =
+        conn
+        |> with_auth_session(user, :auth)
+        |> get(~p"/auth/callback?code=stub-code&state=the-state")
+
+      assert redirected_to(conn) == ~p"/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "already linked to"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Sign out first"
+      assert Accounts.get_user(user.id).auth0_sub == "email|abc"
     end
   end
 

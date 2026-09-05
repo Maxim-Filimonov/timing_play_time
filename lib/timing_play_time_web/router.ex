@@ -29,6 +29,8 @@ defmodule TimingPlayTimeWeb.Router do
 
     get "/link", AuthController, :link
     get "/login", AuthController, :login
+    get "/continue", AuthController, :continue
+    get "/logout", AuthController, :logout
     get "/callback", AuthController, :callback
   end
 

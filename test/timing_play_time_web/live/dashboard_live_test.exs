@@ -1032,7 +1032,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     test "shows for a User with 0 Activities and no Integration", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/")
 
-      assert html =~ "Sign in to recover it"
+      assert html =~ "Continue with email"
       assert html =~ "I&#39;m new — hide this"
     end
 
@@ -1047,7 +1047,7 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/")
 
-      refute html =~ "Sign in to recover it"
+      refute html =~ "Continue with email"
     end
 
     test "does not show once dismissed", %{conn: conn, user: user} do
@@ -1056,16 +1056,16 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/")
 
-      refute html =~ "Sign in to recover it"
+      refute html =~ "Continue with email"
     end
 
     test "dismissing persists and hides the banner", %{conn: conn, user: user} do
       {:ok, view, html} = live(conn, ~p"/")
-      assert html =~ "Sign in to recover it"
+      assert html =~ "Continue with email"
 
       html = render_click(view, "dismiss_arrival_banner", %{})
 
-      refute html =~ "Sign in to recover it"
+      refute html =~ "Continue with email"
       assert Accounts.get_user(user.id).arrival_banner_dismissed == true
     end
   end
