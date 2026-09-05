@@ -102,33 +102,41 @@ defmodule TimingPlayTime.Plugins.IdentityProvider.Auth0 do
   `supervised_adapter_children/1` picks it up. `backoff_type: :exponential`
   (never `:stop`) so the app still boots when Auth0's `.well-known` is
   unreachable (ADR-0015's environments constraint).
+
+  When `domain` isn't configured at all (a dev boot with no `.env` filled
+  in yet — `config/runtime.exs` logs this at startup), starts nothing
+  rather than an `oidcc` worker retrying forever against a garbage
+  `https:///` issuer: there's no tenant to reach, so there's nothing useful
+  to retry. The Link/Sign-in buttons still yield the generic failure via
+  `fetch_config/0`'s ordinary `{:error, _}` return.
   """
   def child_spec(_opts) do
-    %{
-      id: @provider_worker,
-      start:
-        {Oidcc.ProviderConfiguration.Worker, :start_link,
-         [
-           %{
-             issuer: "https://#{fetch_config!().domain}/",
-             name: @provider_worker,
-             backoff_type: :exponential
-           }
-         ]}
-    }
+    case fetch_config() do
+      {:ok, %{domain: domain}} when is_binary(domain) and domain != "" ->
+        %{
+          id: @provider_worker,
+          start:
+            {Oidcc.ProviderConfiguration.Worker, :start_link,
+             [
+               %{
+                 issuer: "https://#{domain}/",
+                 name: @provider_worker,
+                 backoff_type: :exponential
+               }
+             ]}
+        }
+
+      _not_configured ->
+        # A no-op child: starts, exits normally, and (restart: :temporary)
+        # is never restarted — the supervisor treats it as done, not failed.
+        %{id: @provider_worker, start: {Task, :start_link, [fn -> :ok end]}, restart: :temporary}
+    end
   end
 
   defp fetch_config do
     case Application.get_env(:timing_play_time, __MODULE__) do
       nil -> {:error, :identity_provider_not_configured}
       config when is_list(config) -> {:ok, Map.new(config)}
-    end
-  end
-
-  defp fetch_config! do
-    case fetch_config() do
-      {:ok, config} -> config
-      {:error, reason} -> raise "Auth0 identity provider misconfigured: #{inspect(reason)}"
     end
   end
 

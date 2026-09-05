@@ -68,8 +68,27 @@ defmodule TimingPlayTime.Plugins.IdentityProvider.Auth0Test do
              ) == {:error, :identity_provider_not_configured}
     end
 
-    test "child_spec/1 raises rather than starting a worker with a garbage issuer" do
-      assert_raise RuntimeError, ~r/misconfigured/, fn -> Auth0.child_spec([]) end
+    test "child_spec/1 starts nothing rather than an oidcc worker with a garbage issuer" do
+      assert %{id: Auth0.ProviderConfiguration, start: {Task, :start_link, [_fun]}, restart: :temporary} =
+               Auth0.child_spec([])
+    end
+  end
+
+  describe "with an Auth0 client configured but blank (dev, .env not filled in yet)" do
+    setup do
+      Application.put_env(:timing_play_time, Auth0,
+        domain: nil,
+        client_id: nil,
+        client_secret: nil,
+        redirect_uri: nil
+      )
+
+      on_exit(fn -> Application.delete_env(:timing_play_time, Auth0) end)
+    end
+
+    test "child_spec/1 starts nothing rather than retrying against https:///" do
+      assert %{id: Auth0.ProviderConfiguration, start: {Task, :start_link, [_fun]}, restart: :temporary} =
+               Auth0.child_spec([])
     end
   end
 end
