@@ -1,7 +1,7 @@
 defmodule TimingPlayTimeWeb.AuthController do
   @moduledoc """
-  The Auth0 redirect round-trip (ADR-0015): `link` and `login` both send the
-  browser off to Auth0's hosted Universal Login page, and `callback`
+  The Auth0 redirect round-trip (ADR-0015): `login` and `continue` both send
+  the browser off to Auth0's hosted Universal Login page, and `callback`
   processes the return trip. Every branch redirects — this controller never
   renders.
 
@@ -23,10 +23,6 @@ defmodule TimingPlayTimeWeb.AuthController do
   @identity_provider Application.compile_env!(:timing_play_time, :identity_provider_adapter)
 
   @generic_failure "That didn't complete. Please try again."
-
-  def link(conn, _params) do
-    start_flow(conn, :link, ~p"/settings", login_hint: nil)
-  end
 
   def login(conn, _params) do
     start_flow(conn, :login, ~p"/", login_hint: nil)
@@ -72,30 +68,6 @@ defmodule TimingPlayTimeWeb.AuthController do
           {:ok, claims} -> handle_verified(conn, flow, claims)
           {:error, reason} -> handle_failure(conn, flow, reason)
         end
-    end
-  end
-
-  defp handle_verified(conn, :link, claims) do
-    case Accounts.link_identity(conn.assigns.current_user, claims) do
-      {:ok, _user} ->
-        conn
-        |> put_flash(:info, "Email linked.")
-        |> redirect(to: ~p"/settings")
-
-      {:error, :already_linked} ->
-        masked = conn.assigns.current_user.email |> mask_email()
-
-        conn
-        |> put_flash(:error, "This Playtime is already linked to #{masked}.")
-        |> redirect(to: ~p"/settings")
-
-      {:error, :identity_taken} ->
-        conn
-        |> put_flash(
-          :error,
-          "That email is already linked to another Playtime, which can't be merged. Try a different email."
-        )
-        |> redirect(to: ~p"/settings")
     end
   end
 
@@ -162,7 +134,6 @@ defmodule TimingPlayTimeWeb.AuthController do
     generic_failure(conn, origin_for(flow))
   end
 
-  defp origin_for(:link), do: ~p"/settings"
   defp origin_for(:login), do: ~p"/"
   defp origin_for(:auth), do: ~p"/"
 

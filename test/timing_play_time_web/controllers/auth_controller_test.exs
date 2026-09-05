@@ -16,16 +16,7 @@ defmodule TimingPlayTimeWeb.AuthControllerTest do
     |> Plug.Test.init_test_session(auth: %{flow: flow, params: %{state: "the-state"}})
   end
 
-  describe "link/2 and login/2" do
-    test "link redirects out to the IdP with a stashed :auth session", %{conn: conn} do
-      {:ok, user} = Accounts.create_user()
-
-      conn = conn |> log_in_user(user) |> get(~p"/auth/link")
-
-      assert redirected_to(conn, 302) =~ "/auth/callback"
-      assert %{flow: :link} = get_session(conn, :auth)
-    end
-
+  describe "login/2 and continue/2" do
     test "login redirects out to the IdP with a stashed :auth session", %{conn: conn} do
       {:ok, user} = Accounts.create_user()
 
@@ -72,57 +63,6 @@ defmodule TimingPlayTimeWeb.AuthControllerTest do
     test "/ and /settings never call the IdentityProvider Stub", %{conn: conn} do
       conn = get(conn, ~p"/")
       assert html_response(conn, 200)
-    end
-  end
-
-  describe "callback/2 — link flow" do
-    test "happy path links the identity and redirects to /settings", %{conn: conn} do
-      {:ok, user} = Accounts.create_user()
-      Stub.stub_next_result({:ok, %{sub: "email|abc", email: "a@b.com"}})
-
-      conn =
-        conn
-        |> with_auth_session(user, :link)
-        |> get(~p"/auth/callback?code=stub-code&state=the-state")
-
-      assert redirected_to(conn) == ~p"/settings"
-      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Email linked."
-
-      updated = Accounts.get_user(user.id)
-      assert updated.auth0_sub == "email|abc"
-      assert updated.email == "a@b.com"
-    end
-
-    test "email already on another User is refused", %{conn: conn} do
-      {:ok, other} = Accounts.create_user()
-      {:ok, _other} = Accounts.link_identity(other, %{sub: "email|other", email: "taken@b.com"})
-
-      {:ok, user} = Accounts.create_user()
-      Stub.stub_next_result({:ok, %{sub: "email|fresh", email: "taken@b.com"}})
-
-      conn =
-        conn
-        |> with_auth_session(user, :link)
-        |> get(~p"/auth/callback?code=stub-code&state=the-state")
-
-      assert redirected_to(conn) == ~p"/settings"
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "already linked to another Playtime"
-      assert Accounts.get_user(user.id).auth0_sub == nil
-    end
-
-    test "re-link with a different sub is refused", %{conn: conn} do
-      {:ok, user} = Accounts.create_user()
-      {:ok, user} = Accounts.link_identity(user, %{sub: "email|abc", email: "a@b.com"})
-      Stub.stub_next_result({:ok, %{sub: "email|xyz", email: "new@b.com"}})
-
-      conn =
-        conn
-        |> with_auth_session(user, :link)
-        |> get(~p"/auth/callback?code=stub-code&state=the-state")
-
-      assert redirected_to(conn) == ~p"/settings"
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "already linked to"
-      assert Accounts.get_user(user.id).auth0_sub == "email|abc"
     end
   end
 
@@ -288,21 +228,26 @@ defmodule TimingPlayTimeWeb.AuthControllerTest do
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Sign out first"
       assert Accounts.get_user(user.id).auth0_sub == "email|abc"
     end
-  end
 
-  describe "callback/2 — failure modes" do
-    test "user abandons / Auth0 errors return to origin with the generic failure (link)", %{conn: conn} do
+    test "email already on another User is refused", %{conn: conn} do
+      {:ok, other} = Accounts.create_user()
+      {:ok, _other} = Accounts.link_identity(other, %{sub: "email|other", email: "taken@b.com"})
+
       {:ok, user} = Accounts.create_user()
+      Stub.stub_next_result({:ok, %{sub: "email|fresh", email: "taken@b.com"}})
 
       conn =
         conn
-        |> with_auth_session(user, :link)
-        |> get(~p"/auth/callback?error=access_denied")
+        |> with_auth_session(user, :auth)
+        |> get(~p"/auth/callback?code=stub-code&state=the-state")
 
-      assert redirected_to(conn) == ~p"/settings"
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) == "That didn't complete. Please try again."
+      assert redirected_to(conn) == ~p"/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "already linked to another Playtime"
+      assert Accounts.get_user(user.id).auth0_sub == nil
     end
+  end
 
+  describe "callback/2 — failure modes" do
     test "user abandons / Auth0 errors return to origin with the generic failure (login)", %{conn: conn} do
       {:ok, user} = Accounts.create_user()
 

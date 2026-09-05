@@ -27,7 +27,6 @@ defmodule TimingPlayTimeWeb.Router do
   scope "/auth", TimingPlayTimeWeb do
     pipe_through :browser
 
-    get "/link", AuthController, :link
     get "/login", AuthController, :login
     get "/continue", AuthController, :continue
     get "/logout", AuthController, :logout
