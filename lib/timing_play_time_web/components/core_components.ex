@@ -465,4 +465,26 @@ defmodule TimingPlayTimeWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Masks a Linked Email's local part for display (ADR-0015): first char,
+  `•••`, last char of the local part, `@`, full domain — e.g.
+  `"maxim@example.com"` becomes `"m•••m@example.com"`. `nil` passes through.
+  """
+  def mask_email(nil), do: nil
+
+  def mask_email(email) do
+    case String.split(email, "@", parts: 2) do
+      [local, domain] -> "#{mask_local(local)}@#{domain}"
+      _other -> email
+    end
+  end
+
+  defp mask_local(local) when byte_size(local) <= 1, do: local
+
+  defp mask_local(local) do
+    first = String.first(local)
+    last = String.last(local)
+    "#{first}•••#{last}"
+  end
 end

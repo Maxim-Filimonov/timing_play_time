@@ -54,4 +54,28 @@ defmodule TimingPlayTimeWeb.SettingsLiveTest do
 
     assert Accounts.get_integration(user).credentials == %{"api_key" => "new-key"}
   end
+
+  describe "Sign-in & devices" do
+    test "anonymous User sees the unified continue affordance, no unverified state", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/settings")
+
+      assert html =~ "Continue with email"
+      assert html =~ ~s(href="/auth/continue")
+      refute html =~ "unverified"
+      refute html =~ "finish linking"
+    end
+
+    test "linked User sees the masked read-only line and fineprint", %{conn: conn, user: user} do
+      {:ok, user} = Accounts.link_identity(user, %{sub: "email|abc", email: "maxim@example.com"})
+      conn = log_in_user(conn, user)
+
+      {:ok, _view, html} = live(conn, ~p"/settings")
+
+      assert html =~ "m•••m@example.com"
+      assert html =~ "Changing or removing this isn&#39;t available."
+      assert html =~ "Sign in as someone else"
+      assert html =~ ~s(href="/auth/logout")
+      refute html =~ "unverified"
+    end
+  end
 end

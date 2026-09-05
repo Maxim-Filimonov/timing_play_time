@@ -63,7 +63,9 @@ defmodule TimingPlayTime.MixProject do
       {:castore, "~> 1.0"},
       {:tzdata, "~> 1.1"},
       {:cloak, "~> 1.1"},
-      {:cloak_ecto, "~> 1.3"}
+      {:cloak_ecto, "~> 1.3"},
+      {:oidcc, "~> 3.9"},
+      {:dotenvy, "~> 0.9"}
     ]
   end
 

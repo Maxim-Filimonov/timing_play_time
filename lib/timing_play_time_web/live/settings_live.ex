@@ -9,6 +9,7 @@ defmodule TimingPlayTimeWeb.SettingsLive do
       socket
       |> assign(:page_title, "Settings")
       |> assign(:integration, Accounts.get_integration(socket.assigns.current_user))
+      |> assign(:linked_email, socket.assigns.current_user.email)
 
     {:ok, socket}
   end

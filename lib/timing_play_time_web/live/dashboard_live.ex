@@ -85,6 +85,10 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       |> assign(:editing_multiplier, nil)
       |> assign(:pending_activity, nil)
       |> assign(:source_list, :loading)
+      |> assign(
+        :show_arrival_banner,
+        not user.arrival_banner_dismissed and Accounts.arrival_user?(user)
+      )
 
     # The static (disconnected) render has no client to query Timing with, so
     # fetching would fail and silently score every Activity as 0 (per
@@ -231,6 +235,18 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       _ ->
         {:noreply, put_flash(socket, :error, "Please enter a valid number")}
     end
+  end
+
+  @impl true
+  def handle_event("dismiss_arrival_banner", _params, socket) do
+    {:ok, user} = Accounts.dismiss_arrival_banner(socket.assigns.current_user)
+
+    socket =
+      socket
+      |> assign(:current_user, user)
+      |> assign(:show_arrival_banner, false)
+
+    {:noreply, socket}
   end
 
   @impl true

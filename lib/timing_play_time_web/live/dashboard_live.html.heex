@@ -36,6 +36,27 @@
         </a>
       </div>
 
+      <%= if @show_arrival_banner do %>
+        <div class="flex items-center justify-between gap-4 rounded-2xl bg-indigo-50 border-2 border-indigo-200 px-5 py-4">
+          <p class="text-indigo-900 text-sm">
+            New here — or picking up on a new device? Continue with an email to link this
+            Playtime or bring back one you started elsewhere.
+          </p>
+          <div class="flex gap-3 shrink-0">
+            <a href={~p"/auth/continue"} class="text-indigo-700 hover:text-indigo-900 text-sm font-semibold underline">
+              Continue with email
+            </a>
+            <button
+              type="button"
+              phx-click="dismiss_arrival_banner"
+              class="text-indigo-400 hover:text-indigo-600 text-sm font-semibold"
+            >
+              I'm new — hide this
+            </button>
+          </div>
+        </div>
+      <% end %>
+
       <%!-- Playtime Hero Section (day-scoped; the all-time cumulative Play
       Balance lives in the debug overlay below, per the redesign — see
       CONTEXT.md's Play Balance entry for why it isn't shown here) --%>

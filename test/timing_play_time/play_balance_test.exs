@@ -676,7 +676,8 @@ defmodule TimingPlayTime.PlayBalanceTest do
         ]
       }
 
-      assert {:ok, %{deficit: 0.0}} = PlayBalance.log_spend(user, 20.0, now, [], raw_entries)
+      assert {:ok, %{deficit: deficit}} = PlayBalance.log_spend(user, 20.0, now, [], raw_entries)
+      assert deficit == 0.0
 
       assert {:ok, rows} = PersistenceStub.list_entry_consumption(user.id)
       assert Enum.all?(rows, &is_binary(&1.time_entry_id))

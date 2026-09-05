@@ -9,11 +9,13 @@ defmodule TimingPlayTime.Application do
   def start(_type, _args) do
     persistence_adapter = Application.fetch_env!(:timing_play_time, :persistence_adapter)
     time_source_adapter = Application.fetch_env!(:timing_play_time, :time_source_adapter)
+    identity_provider_adapter = Application.fetch_env!(:timing_play_time, :identity_provider_adapter)
 
     children =
       [TimingPlayTimeWeb.Telemetry, TimingPlayTime.Vault] ++
         supervised_adapter_children(persistence_adapter) ++
         supervised_adapter_children(time_source_adapter) ++
+        supervised_adapter_children(identity_provider_adapter) ++
         [
           TimingPlayTime.Repo,
           {Ecto.Migrator,
@@ -44,10 +46,12 @@ defmodule TimingPlayTime.Application do
 
   # Not every plug-in adapter needs a supervised process (e.g. Sqlite is a
   # stateless wrapper around the already-supervised Repo); only start one when
-  # the adapter actually implements start_link/1 (as the ETS-backed Persistence
-  # Stub and the ExMCP-backed Timing adapter do).
+  # the adapter has a child_spec/1 to start from (as the ETS-backed
+  # Persistence Stub's `use GenServer` and the Auth0 IdentityProvider
+  # adapter's own child_spec/1 do — ADR-0015). The IdentityProvider Stub
+  # starts nothing, same as the ExMCP-backed Timing adapter.
   defp supervised_adapter_children(adapter) do
-    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :start_link, 1) do
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :child_spec, 1) do
       [{adapter, []}]
     else
       []

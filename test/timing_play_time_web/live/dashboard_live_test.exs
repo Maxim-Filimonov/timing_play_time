@@ -1027,4 +1027,46 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
       assert html =~ "raw-id-only"
     end
   end
+
+  describe "arrival banner (email linking, ADR-0015)" do
+    test "shows for a User with 0 Activities and no Integration", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ "Continue with email"
+      assert html =~ "I&#39;m new — hide this"
+    end
+
+    test "does not show once the User has an Activity", %{conn: conn, user: user} do
+      {:ok, _activity} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          activated_at: DateTime.utc_now()
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      refute html =~ "Continue with email"
+    end
+
+    test "does not show once dismissed", %{conn: conn, user: user} do
+      {:ok, _user} = Accounts.dismiss_arrival_banner(user)
+      conn = log_in_user(conn, user)
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      refute html =~ "Continue with email"
+    end
+
+    test "dismissing persists and hides the banner", %{conn: conn, user: user} do
+      {:ok, view, html} = live(conn, ~p"/")
+      assert html =~ "Continue with email"
+
+      html = render_click(view, "dismiss_arrival_banner", %{})
+
+      refute html =~ "Continue with email"
+      assert Accounts.get_user(user.id).arrival_banner_dismissed == true
+    end
+  end
 end

@@ -337,7 +337,8 @@ defmodule TimingPlayTime.PersistenceContractCase do
 
       describe "manual sync" do
         test "get_manual_sync_total/1 defaults to 0.0", %{user_id: user_id} do
-          assert {:ok, 0.0} = @persistence.get_manual_sync_total(user_id)
+          assert {:ok, total} = @persistence.get_manual_sync_total(user_id)
+          assert total == 0.0
         end
 
         test "set_manual_sync_total/2 sets and returns the new total", %{user_id: user_id} do
@@ -357,8 +358,10 @@ defmodule TimingPlayTime.PersistenceContractCase do
 
         test "set_manual_sync_total/2 accepts zero", %{user_id: user_id} do
           {:ok, _} = @persistence.set_manual_sync_total(user_id, 100.0)
-          assert {:ok, 0.0} = @persistence.set_manual_sync_total(user_id, 0.0)
-          assert {:ok, 0.0} = @persistence.get_manual_sync_total(user_id)
+          assert {:ok, set} = @persistence.set_manual_sync_total(user_id, 0.0)
+          assert set == 0.0
+          assert {:ok, total} = @persistence.get_manual_sync_total(user_id)
+          assert total == 0.0
         end
 
         test "manual sync total is isolated per user", %{
@@ -367,7 +370,8 @@ defmodule TimingPlayTime.PersistenceContractCase do
         } do
           {:ok, _} = @persistence.set_manual_sync_total(other_user_id, 999.0)
 
-          assert {:ok, 0.0} = @persistence.get_manual_sync_total(user_id)
+          assert {:ok, total} = @persistence.get_manual_sync_total(user_id)
+          assert total == 0.0
         end
       end
 
@@ -393,7 +397,8 @@ defmodule TimingPlayTime.PersistenceContractCase do
         end
 
         test "total_playtime_used/1 defaults to 0.0", %{user_id: user_id} do
-          assert {:ok, 0.0} = @persistence.total_playtime_used(user_id)
+          assert {:ok, total} = @persistence.total_playtime_used(user_id)
+          assert total == 0.0
         end
 
         test "total_playtime_used/1 sums all logged usage for that user", %{user_id: user_id} do
@@ -408,7 +413,8 @@ defmodule TimingPlayTime.PersistenceContractCase do
           {:ok, _} = @persistence.log_playtime_used(other_user_id, 999.0, DateTime.utc_now())
 
           assert {:ok, []} = @persistence.list_playtime_used(user_id)
-          assert {:ok, 0.0} = @persistence.total_playtime_used(user_id)
+          assert {:ok, total} = @persistence.total_playtime_used(user_id)
+          assert total == 0.0
         end
       end
 

@@ -1,5 +1,20 @@
 import Config
 
+# Loads dev's Auth0 credentials from a gitignored `.env` (written by
+# `scripts/auth0-dev-setup.sh`) — only for :dev/:prod (same scope as the
+# Auth0 config block below; :test never touches Auth0 and shouldn't print
+# about it or pick up stray `.env` values). A no-op when the file is absent
+# (CI, prod, where the same-named env vars are set directly).
+if config_env() in [:dev, :prod] do
+  if File.exists?(".env") do
+    IO.puts("[Auth0] Loading Auth0 dev credentials from .env")
+  else
+    IO.puts("[Auth0] No .env file found — Auth0 config (if any) comes from the process environment")
+  end
+
+  Dotenvy.source!([".env", System.get_env()])
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
@@ -23,6 +38,52 @@ end
 # TIMING_API_KEY and TZ were required boot-time env vars here before ADR-0006/
 # ADR-0007 — both are now per-user (Integration credentials, users.timezone)
 # instead of app-wide config, so there's nothing to read at boot anymore.
+
+# Auth0 (ADR-0015) is wired for :dev and :prod only — :test selects the
+# IdentityProvider Stub (config/test.exs) and never touches Auth0. In :prod a
+# missing var raises (matching SECRET_KEY_BASE's pattern below); in :dev it's
+# left nil, which the app boots fine with — the link/login buttons just yield
+# the generic failure until `.env` (scripts/auth0-dev-setup.sh) is filled in.
+if config_env() in [:dev, :prod] do
+  auth0_var = fn name ->
+    case config_env() do
+      :prod ->
+        System.get_env(name) ||
+          raise """
+          environment variable #{name} is missing.
+          """
+
+      :dev ->
+        # Dotenvy.source!/2's default side effect stores parsed values in its
+        # own process-dictionary-backed store, not via System.put_env/2 — so
+        # this must read back through Dotenvy.env!/3, not System.get_env/1,
+        # or a value that's only in `.env` (not already a real OS env var)
+        # would silently read as unset.
+        Dotenvy.env!(name, :string, nil)
+    end
+  end
+
+  auth0_config = [
+    domain: auth0_var.("AUTH0_DOMAIN"),
+    client_id: auth0_var.("AUTH0_CLIENT_ID"),
+    client_secret: auth0_var.("AUTH0_CLIENT_SECRET"),
+    redirect_uri: auth0_var.("AUTH0_CALLBACK_URL")
+  ]
+
+  # :prod already raised above on any var missing; this is purely a :dev
+  # convenience so "the buttons yield the generic failure" (per the comment
+  # above) has a boot-time reason attached instead of being a silent no-op.
+  case Enum.filter(auth0_config, fn {_key, value} -> is_nil(value) end) do
+    [] ->
+      IO.puts("[Auth0] Configured for domain #{auth0_config[:domain]}")
+
+    missing ->
+      missing_names = Enum.map_join(missing, ", ", fn {key, _} -> key end)
+      IO.puts("[Auth0] Not fully configured — missing: #{missing_names}. Link/Sign-in will show the generic failure until these are set (see .env / scripts/auth0-dev-setup.sh).")
+  end
+
+  config :timing_play_time, TimingPlayTime.Plugins.IdentityProvider.Auth0, auth0_config
+end
 
 if config_env() == :prod do
   database_path =

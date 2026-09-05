@@ -60,6 +60,64 @@
         </form>
       </div>
 
+      <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-indigo-200">
+        <h2 class="text-xl font-bold text-gray-900 mb-4">🔑 Sign-in & devices</h2>
+
+        <%= if @current_user.auth0_sub do %>
+          <p class="text-green-700 font-semibold mb-1">
+            {mask_email(@linked_email)} ✓
+          </p>
+          <p class="text-gray-500 text-xs mb-4">Changing or removing this isn't available.</p>
+
+          <div class="flex gap-4 items-center">
+            <button
+              type="button"
+              onclick={"document.getElementById('switch-account-dialog-linked').showModal()"}
+              class="text-indigo-700 hover:text-indigo-900 text-sm font-semibold underline"
+            >
+              Sign in as someone else
+            </button>
+            <a href={~p"/auth/logout"} class="text-gray-500 hover:text-gray-700 text-sm font-semibold underline">
+              Sign out
+            </a>
+          </div>
+
+          <dialog id="switch-account-dialog-linked" class="rounded-2xl p-6 shadow-2xl backdrop:bg-black/40 max-w-sm">
+            <p class="text-gray-900 font-semibold mb-2">Your current play time isn't deleted.</p>
+            <p class="text-gray-600 text-sm mb-6">
+              You can come back anytime by signing in with {mask_email(@linked_email)}.
+            </p>
+            <div class="flex gap-3 justify-end">
+              <button
+                type="button"
+                onclick={"document.getElementById('switch-account-dialog-linked').close()"}
+                class="text-gray-500 hover:text-gray-700 text-sm font-semibold px-4 py-2"
+              >
+                Cancel
+              </button>
+              <a
+                href={~p"/auth/login"}
+                class="bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold text-sm py-2 px-4 rounded-xl"
+              >
+                Sign in as someone else
+              </a>
+            </div>
+          </dialog>
+        <% else %>
+          <p class="text-gray-600 mb-4 text-sm">
+            Continue with an email to link this Playtime so you can get back to it on another
+            device, or to sign in to one you started elsewhere.
+          </p>
+
+          <a
+            href={~p"/auth/continue"}
+            class="bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold py-3 px-6 rounded-xl hover:from-indigo-600 hover:to-purple-600 transition-all duration-200 shadow-lg hover:shadow-xl"
+          >
+            Continue with email
+          </a>
+        <% end %>
+      </div>
+
       <p class="text-center text-xs text-gray-400">Account ID: {@current_user.id}</p>
     </div>
   </div>
