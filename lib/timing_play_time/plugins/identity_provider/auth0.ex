@@ -37,15 +37,24 @@ defmodule TimingPlayTime.Plugins.IdentityProvider.Auth0 do
           url_extension: url_extension(login_hint)
         }
 
-      case Oidcc.create_redirect_url(@provider_worker, config.client_id, config.client_secret, auth_opts) do
-        {:ok, url} ->
-          {:ok, url, %{state: state, nonce: nonce, pkce_verifier: pkce_verifier}}
-
-        {:error, reason} ->
-          {:error, reason}
+      @provider_worker
+      |> Oidcc.create_redirect_url(config.client_id, config.client_secret, auth_opts)
+      |> normalize_redirect_url()
+      |> case do
+        {:ok, url} -> {:ok, url, %{state: state, nonce: nonce, pkce_verifier: pkce_verifier}}
+        {:error, reason} -> {:error, reason}
       end
     end
   end
+
+  # oidcc's `:uri_string.uri_string()` return type is `unicode:chardata()`,
+  # not necessarily a plain binary — against a real Auth0 tenant it comes
+  # back as an iolist. `redirect(external: url)` requires a binary
+  # (`Plug.HTML.html_escape/1` pattern-matches `is_binary`), so every real
+  # link/login click crashed with a FunctionClauseError without this.
+  @doc false
+  def normalize_redirect_url({:ok, url}), do: {:ok, IO.iodata_to_binary(url)}
+  def normalize_redirect_url({:error, _reason} = error), do: error
 
   defp url_extension(nil), do: [{"connection", "email"}]
   defp url_extension(login_hint), do: [{"connection", "email"}, {"login_hint", login_hint}]

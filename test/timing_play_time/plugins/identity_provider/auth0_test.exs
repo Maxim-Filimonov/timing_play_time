@@ -91,4 +91,49 @@ defmodule TimingPlayTime.Plugins.IdentityProvider.Auth0Test do
                Auth0.child_spec([])
     end
   end
+
+  describe "authorization_url/1 return shape" do
+    # Oidcc.Authorization.create_redirect_url/2 returns `{:ok, iodata}` — its
+    # `:uri_string.uri_string()` type is `unicode:chardata()`, not
+    # necessarily a plain binary, and in practice (against a real Auth0
+    # tenant) it comes back as a 3-element iolist. AuthController hands the
+    # value straight to `redirect(external: url)`, which requires a binary
+    # (`Plug.HTML.html_escape/1` pattern-matches `is_binary`) — a raw pass-
+    # through crashes with a FunctionClauseError on every real link/login
+    # click. Reproduced here with a network-free, manually-built
+    # `Oidcc.ClientContext` (per `Oidcc.ClientContext.from_manual/5`) rather
+    # than a live provider-configuration worker, so no network is touched.
+    test "normalizes oidcc's iodata redirect URL into a plain binary" do
+      config = %Oidcc.ProviderConfiguration{
+        issuer: "https://example.auth0.com",
+        authorization_endpoint: "https://example.auth0.com/authorize",
+        code_challenge_methods_supported: ["S256"]
+      }
+
+      jwks = JOSE.JWK.generate_key({:oct, 16})
+      client_context = Oidcc.ClientContext.from_manual(config, jwks, "client_id", "client_secret")
+
+      opts = %{
+        redirect_uri: "http://localhost:4000/auth/callback",
+        state: "s",
+        nonce: "n",
+        pkce_verifier: "v",
+        require_pkce: true,
+        scopes: ["openid", "email"],
+        url_extension: [{"connection", "email"}]
+      }
+
+      assert {:ok, iodata_url} = Oidcc.Authorization.create_redirect_url(client_context, opts)
+      refute is_binary(iodata_url)
+
+      assert {:ok, url} = Auth0.normalize_redirect_url({:ok, iodata_url})
+      assert is_binary(url)
+      assert url == IO.iodata_to_binary(iodata_url)
+      assert url =~ "https://example.auth0.com/authorize?"
+    end
+
+    test "passes an :error result through unchanged" do
+      assert Auth0.normalize_redirect_url({:error, :boom}) == {:error, :boom}
+    end
+  end
 end
