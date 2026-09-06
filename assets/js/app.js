@@ -26,8 +26,14 @@ import {hooks as colocatedHooks} from "phoenix-colocated/timing_play_time"
 import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
+// No longPollFallbackMs: stay WebSocket-only and let phoenix.js retry the
+// socket with backoff. On Fly (min_machines_running = 0) the first connect
+// lands mid cold-start and can exceed a short fallback timeout; falling back
+// to longpoll then stuck the page there — longpoll's polls are throttled in
+// a background tab, so Fly saw no connections and autostopped the machine,
+// leaving "something went wrong" until a full reload. A held WebSocket keeps
+// the machine up and reconnects on its own.
 const liveSocket = new LiveSocket("/live", Socket, {
-  longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
   hooks: {...colocatedHooks},
 })
