@@ -70,4 +70,19 @@ defmodule TimingPlayTime.ActivityManager do
   def delete_activity(user_id, id) do
     @persistence.delete_activity(user_id, id)
   end
+
+  @doc """
+  Counts a user's activities — used by the Settings disconnect flow to
+  decide whether to warn before removing an Integration (ADR-0016).
+
+  ## Examples
+
+      iex> count_activities(user.id)
+      {:ok, 2}
+  """
+  def count_activities(user_id) do
+    with {:ok, activities} <- list_activities(user_id) do
+      {:ok, length(activities)}
+    end
+  end
 end

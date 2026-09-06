@@ -16,7 +16,6 @@ defmodule TimingPlayTime.PlayBalance do
   alias TimingPlayTime.PlaytimeUsed
 
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
-  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
   # The Entry Expiry Window (ADR-0010): an exact rolling cutoff, re-evaluated
   # on every read, not aligned to local calendar days.
@@ -101,7 +100,7 @@ defmodule TimingPlayTime.PlayBalance do
         activity,
         user,
         now \\ DateTime.utc_now(),
-        get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2
+        get_elapsed_minutes \\ &TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes/2
       ) do
     today_from = LocalDay.start_of_today(user.timezone, now)
 
@@ -464,7 +463,7 @@ defmodule TimingPlayTime.PlayBalance do
         now \\ DateTime.utc_now(),
         time_source_opts \\ [],
         raw_entries \\ nil,
-        list_entries \\ &@time_source.list_entries/2
+        list_entries \\ &TimingPlayTime.Plugins.TimeSource.Stub.list_entries/2
       )
 
   # The two-pass draw-down needs a local day boundary (ADR-0005), and a User
@@ -514,7 +513,11 @@ defmodule TimingPlayTime.PlayBalance do
   the computation (ADR-0008's accepted shared failure blast radius)
   rather than isolating the failure to just one Activity.
   """
-  def get_totals(activities, opts \\ [], get_elapsed_minutes \\ &@time_source.get_elapsed_minutes/2) do
+  def get_totals(
+        activities,
+        opts \\ [],
+        get_elapsed_minutes \\ &TimingPlayTime.Plugins.TimeSource.Stub.get_elapsed_minutes/2
+      ) do
     case get_elapsed_minutes.(activities, opts) do
       {:ok, totals} -> totals
       {:error, _reason} -> %{}

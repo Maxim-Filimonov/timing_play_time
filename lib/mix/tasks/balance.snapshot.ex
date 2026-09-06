@@ -29,10 +29,12 @@ defmodule Mix.Tasks.Balance.Snapshot do
   use Mix.Task
 
   alias TimingPlayTime.Accounts
+  alias TimingPlayTime.EntryLedger
+  alias TimingPlayTime.LocalDay
   alias TimingPlayTime.PlayBalance
+  alias TimingPlayTime.Plugins.TimeSource
 
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
-  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
   # Mirrors the `@session_options` in lib/timing_play_time_web/endpoint.ex —
   # keep these two salts in sync if that ever changes.
@@ -48,12 +50,12 @@ defmodule Mix.Tasks.Balance.Snapshot do
 
     user = fetch_user!(opts)
     now = parse_now!(opts[:now])
-    time_source_opts = connect_time_source(user)
+    {module, time_source_opts} = connect_time_source(user)
 
     print_header(user, now)
-    print_play_balance(user, time_source_opts)
-    print_today(user, now, time_source_opts)
-    print_activities(user, now, time_source_opts)
+    print_play_balance(user, module, time_source_opts)
+    print_today(user, now, module, time_source_opts)
+    print_activities(user, now, module, time_source_opts)
   end
 
   defp fetch_user!(opts) do
@@ -99,18 +101,21 @@ defmodule Mix.Tasks.Balance.Snapshot do
   end
 
   defp connect_time_source(user) do
-    case Accounts.get_integration(user) do
+    integration = Accounts.get_integration(user)
+    module = TimeSource.for(integration)
+
+    case integration do
       nil ->
-        []
+        {module, []}
 
       integration ->
-        case @time_source.connect(integration.credentials) do
+        case module.connect(integration.credentials) do
           {:ok, client} ->
-            [client: client]
+            {module, [client: client]}
 
           {:error, reason} ->
-            Mix.shell().info("(no Timing connection: #{inspect(reason)} — entries will be empty)")
-            []
+            Mix.shell().info("(no connection: #{inspect(reason)} — entries will be empty)")
+            {module, []}
         end
     end
   end
@@ -126,58 +131,86 @@ defmodule Mix.Tasks.Balance.Snapshot do
     """)
   end
 
-  defp print_play_balance(user, time_source_opts) do
-    with {:ok, balance} <- PlayBalance.compute(user, time_source_opts) do
-      Mix.shell().info("""
-      -- Play Balance (debug, all-time, unbounded) --
-      Timing-derived total: #{fmt(balance.timing_derived_total)}
-      Manual sync total:    #{fmt(balance.manual_sync_total)}
-      Playtime used total:  #{fmt(balance.playtime_used_total)}
-      Total:                #{fmt(balance.total)}
-      """)
+  defp print_play_balance(user, module, time_source_opts) do
+    with {:ok, activities} <- @persistence.list_activities(user.id) do
+      totals =
+        PlayBalance.get_totals(activities, time_source_opts, &module.get_elapsed_minutes/2)
+
+      with {:ok, balance} <- PlayBalance.compute(user, time_source_opts, totals) do
+        Mix.shell().info("""
+        -- Play Balance (debug, all-time, unbounded) --
+        Timing-derived total: #{fmt(balance.timing_derived_total)}
+        Manual sync total:    #{fmt(balance.manual_sync_total)}
+        Playtime used total:  #{fmt(balance.playtime_used_total)}
+        Total:                #{fmt(balance.total)}
+        """)
+      end
     end
   end
 
-  defp print_today(%{timezone: nil}, _now, _time_source_opts) do
+  defp print_today(%{timezone: nil}, _now, _module, _time_source_opts) do
     Mix.shell().info("-- Playtime -- (skipped: User has no timezone set)")
   end
 
-  defp print_today(user, now, time_source_opts) do
-    with {:ok, today} <- PlayBalance.compute_today(user, now, time_source_opts) do
-      reconciled = today.week_earned - today.week_used + today.pushscroll_balance
+  defp print_today(user, now, module, time_source_opts) do
+    with {:ok, activities} <- @persistence.list_activities(user.id) do
+      window_start = PlayBalance.expiry_window_start(now)
 
-      Mix.shell().info("""
-      -- Playtime (windowed, persisted-ledger, ADR-0012) --
-      Earned today:        #{fmt(today.earned_today)}
-      Used today:          #{fmt(today.used_today)}
-      This Week Earned:    #{fmt(today.week_earned)}
-      This Week Used:      #{fmt(today.week_used)}
-      Pushscroll Balance:  #{fmt(today.pushscroll_balance)}
-      Today's PT:          #{fmt(today.today_net)}
-      Reserve:             #{fmt(today.reserve)}
-      Playtime:            #{fmt(today.playtime)}
-      Reconciled (week_earned - week_used + pushscroll): #{fmt(reconciled)} #{if float_eq?(reconciled, today.playtime), do: "(matches)", else: "(MISMATCH!)"}
-      """)
+      raw_entries =
+        EntryLedger.load(
+          activities,
+          now,
+          [from: window_start] ++ time_source_opts,
+          &module.list_entries/2
+        )
+
+      with {:ok, today} <- PlayBalance.compute_today(user, now, time_source_opts, raw_entries) do
+        reconciled = today.week_earned - today.week_used + today.pushscroll_balance
+
+        Mix.shell().info("""
+        -- Playtime (windowed, persisted-ledger, ADR-0012) --
+        Earned today:        #{fmt(today.earned_today)}
+        Used today:          #{fmt(today.used_today)}
+        This Week Earned:    #{fmt(today.week_earned)}
+        This Week Used:      #{fmt(today.week_used)}
+        Pushscroll Balance:  #{fmt(today.pushscroll_balance)}
+        Today's PT:          #{fmt(today.today_net)}
+        Reserve:             #{fmt(today.reserve)}
+        Playtime:            #{fmt(today.playtime)}
+        Reconciled (week_earned - week_used + pushscroll): #{fmt(reconciled)} #{if float_eq?(reconciled, today.playtime), do: "(matches)", else: "(MISMATCH!)"}
+        """)
+      end
     end
   end
 
-  defp print_activities(%{timezone: nil}, _now, _time_source_opts) do
+  defp print_activities(%{timezone: nil}, _now, _module, _time_source_opts) do
     Mix.shell().info("-- Activities -- (skipped: User has no timezone set)")
   end
 
-  defp print_activities(user, now, time_source_opts) do
+  defp print_activities(user, now, module, time_source_opts) do
     with {:ok, activities} <- @persistence.list_activities(user.id) do
       Mix.shell().info("-- Activities (#{length(activities)}) --")
 
-      get_elapsed_minutes = fn acts, opts -> @time_source.get_elapsed_minutes(acts, opts ++ time_source_opts) end
+      today_from = if user.timezone, do: LocalDay.start_of_today(user.timezone, now)
+
+      totals =
+        PlayBalance.get_totals(
+          activities,
+          [to: now, today_from: today_from] ++ time_source_opts,
+          &module.get_elapsed_minutes/2
+        )
+
+      raw_entries = EntryLedger.load(activities, now, time_source_opts, &module.list_entries/2)
 
       Enum.each(activities, fn activity ->
-        today = PlayBalance.today_activity_minutes(activity, user, now, get_elapsed_minutes)
-        week = PlayBalance.week_activity_minutes(activity, now, time_source_opts)
+        %{play_minutes: today_minutes} = PlayBalance.activity_today_minutes(totals, activity)
+
+        {:ok, %{play_minutes: week_minutes}} =
+          PlayBalance.week_activity_minutes(activity, now, time_source_opts, raw_entries)
 
         Mix.shell().info(
           "  #{activity.name} (#{multiplier_label(activity)}, #{activity.time_source_identifier}): " <>
-            "today=#{fmt_result(today)} week=#{fmt_result(week)}"
+            "today=#{fmt(today_minutes)} week=#{fmt(week_minutes)}"
         )
       end)
     end
@@ -187,9 +220,6 @@ defmodule Mix.Tasks.Balance.Snapshot do
   # direction rather than sign the figure.
   defp multiplier_label(%{effect: :negative} = activity), do: "drain x#{activity.multiplier}"
   defp multiplier_label(activity), do: "x#{activity.multiplier}"
-
-  defp fmt_result({:ok, %{play_minutes: minutes}}), do: fmt(minutes)
-  defp fmt_result({:error, reason}), do: "error(#{inspect(reason)})"
 
   defp fmt(n) when is_float(n), do: :erlang.float_to_binary(n, decimals: 2)
   defp fmt(n), do: to_string(n)

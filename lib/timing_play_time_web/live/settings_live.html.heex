@@ -34,30 +34,95 @@
       </div>
 
       <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-pink-200">
-        <h2 class="text-xl font-bold text-gray-900 mb-4">🔌 Timing Integration</h2>
-        <p class="text-gray-600 mb-4 text-sm">
-          <%= if @integration do %>
-            Connected. Paste a new key below to replace it.
-          <% else %>
-            Not connected yet — paste a personal API key from Timing's web app (API Keys section).
-          <% end %>
-        </p>
+        <h2 class="text-xl font-bold text-gray-900 mb-4">🔌 Time Tracking</h2>
 
-        <form phx-submit="save_integration" class="flex gap-3">
-          <input
-            type="password"
-            name="api_key"
-            placeholder="Timing API key"
-            class="flex-1 px-4 py-3 rounded-xl border-2 border-pink-300 focus:border-pink-500 focus:ring focus:ring-pink-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-pink-50"
-            required
-          />
-          <button
-            type="submit"
-            class="bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold py-3 px-6 rounded-xl hover:from-pink-600 hover:to-purple-600 transition-all duration-200 shadow-lg hover:shadow-xl"
-          >
-            Save
-          </button>
-        </form>
+        <%= if @integration do %>
+          <p class="text-gray-600 mb-4 text-sm">
+            Connected to {integration_label(@integration)}.
+          </p>
+
+          <%= if @confirming_disconnect do %>
+            <div class="rounded-xl border-2 border-red-300 bg-red-50 p-4 space-y-3">
+              <p class="text-red-800 text-sm font-semibold">
+                {disconnect_warning(@activity_count)}
+              </p>
+              <div class="flex gap-3">
+                <button
+                  type="button"
+                  phx-click="confirm_disconnect_integration"
+                  class="bg-red-600 text-white font-bold py-2 px-4 rounded-xl hover:bg-red-700"
+                >
+                  Yes, disconnect
+                </button>
+                <button
+                  type="button"
+                  phx-click="cancel_disconnect_integration"
+                  class="text-gray-600 hover:text-gray-800 font-semibold py-2 px-4"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          <% else %>
+            <button
+              type="button"
+              phx-click="disconnect_integration"
+              class="bg-gray-100 text-gray-700 font-bold py-3 px-6 rounded-xl hover:bg-gray-200 transition-all duration-200"
+            >
+              Disconnect
+            </button>
+          <% end %>
+        <% else %>
+          <p class="text-gray-600 mb-4 text-sm">
+            Not connected yet — connect Timing or RescueTime below.
+          </p>
+
+          <div class="space-y-6">
+            <div>
+              <p class="text-gray-600 mb-3 text-sm">
+                Connect Timing — paste a personal API key from Timing's web app (API Keys section).
+              </p>
+
+              <form phx-submit="save_integration_timing" class="flex gap-3">
+                <input
+                  type="password"
+                  name="api_key"
+                  placeholder="Timing API key"
+                  class="flex-1 px-4 py-3 rounded-xl border-2 border-pink-300 focus:border-pink-500 focus:ring focus:ring-pink-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-pink-50"
+                  required
+                />
+                <button
+                  type="submit"
+                  class="bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold py-3 px-6 rounded-xl hover:from-pink-600 hover:to-purple-600 transition-all duration-200 shadow-lg hover:shadow-xl"
+                >
+                  Save
+                </button>
+              </form>
+            </div>
+
+            <div>
+              <p class="text-gray-600 mb-3 text-sm">
+                Connect RescueTime — paste a personal API key from RescueTime's account settings.
+              </p>
+
+              <form phx-submit="save_integration_rescuetime" class="flex gap-3">
+                <input
+                  type="password"
+                  name="api_key"
+                  placeholder="RescueTime API key"
+                  class="flex-1 px-4 py-3 rounded-xl border-2 border-pink-300 focus:border-pink-500 focus:ring focus:ring-pink-200 focus:ring-opacity-50 text-gray-900 placeholder-gray-400 bg-pink-50"
+                  required
+                />
+                <button
+                  type="submit"
+                  class="bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold py-3 px-6 rounded-xl hover:from-pink-600 hover:to-purple-600 transition-all duration-200 shadow-lg hover:shadow-xl"
+                >
+                  Save
+                </button>
+              </form>
+            </div>
+          </div>
+        <% end %>
       </div>
 
       <div class="bg-white rounded-2xl p-6 shadow-lg border-2 border-indigo-200">

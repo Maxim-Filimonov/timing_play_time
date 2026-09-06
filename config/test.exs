@@ -6,7 +6,7 @@ import Config
 # these defaults.
 config :timing_play_time,
   persistence_adapter: TimingPlayTime.Plugins.Persistence.Stub,
-  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Stub,
+  time_source_adapter_override: TimingPlayTime.Plugins.TimeSource.Stub,
   identity_provider_adapter: TimingPlayTime.Plugins.IdentityProvider.Stub
 
 config :timing_play_time, TimingPlayTime.Vault,

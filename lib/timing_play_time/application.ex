@@ -8,13 +8,11 @@ defmodule TimingPlayTime.Application do
   @impl true
   def start(_type, _args) do
     persistence_adapter = Application.fetch_env!(:timing_play_time, :persistence_adapter)
-    time_source_adapter = Application.fetch_env!(:timing_play_time, :time_source_adapter)
     identity_provider_adapter = Application.fetch_env!(:timing_play_time, :identity_provider_adapter)
 
     children =
       [TimingPlayTimeWeb.Telemetry, TimingPlayTime.Vault] ++
         supervised_adapter_children(persistence_adapter) ++
-        supervised_adapter_children(time_source_adapter) ++
         supervised_adapter_children(identity_provider_adapter) ++
         [
           TimingPlayTime.Repo,

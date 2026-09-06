@@ -19,10 +19,17 @@ defmodule TimingPlayTime.Accounts.Integration do
 
   @fields [:provider, :credentials, :user_id]
 
+  # Keeps `provider` in sync with `TimeSource.for/1`'s dispatch map
+  # (ADR-0016) — anything else would only surface as an unhandled KeyError
+  # the next time that Integration is used, rather than a clear validation
+  # error at save time.
+  @providers ["timing", "rescuetime"]
+
   def changeset(integration, attrs) do
     integration
     |> cast(attrs, @fields)
     |> validate_required(@fields)
+    |> validate_inclusion(:provider, @providers)
     |> unique_constraint(:user_id)
   end
 end

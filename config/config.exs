@@ -11,7 +11,6 @@ config :timing_play_time,
   ecto_repos: [TimingPlayTime.Repo],
   generators: [timestamp_type: :utc_datetime],
   persistence_adapter: TimingPlayTime.Plugins.Persistence.Sqlite,
-  time_source_adapter: TimingPlayTime.Plugins.TimeSource.Timing,
   identity_provider_adapter: TimingPlayTime.Plugins.IdentityProvider.Auth0
 
 # Named IANA zones (e.g. "Pacific/Auckland") need a real tz database — Elixir's

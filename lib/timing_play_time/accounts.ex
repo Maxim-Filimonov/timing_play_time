@@ -56,6 +56,19 @@ defmodule TimingPlayTime.Accounts do
   end
 
   @doc """
+  Removes a User's Integration (ADR-0016's Settings disconnect flow). A
+  no-op returning `{:ok, nil}` when there is none — disconnecting twice, or
+  disconnecting a User who never connected, isn't an error.
+  """
+  @spec delete_integration(User.t()) :: {:ok, Integration.t() | nil} | {:error, term()}
+  def delete_integration(%User{} = user) do
+    case get_integration(user) do
+      nil -> {:ok, nil}
+      integration -> Repo.delete(integration)
+    end
+  end
+
+  @doc """
   Links a verified Auth0 identity to `user` (an existing, typically anonymous
   User). Idempotent: relinking `user` with its own current sub re-syncs
   `email`, returns `{:ok, user}`.

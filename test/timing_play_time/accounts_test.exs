@@ -92,6 +92,51 @@ defmodule TimingPlayTime.AccountsTest do
 
       assert Accounts.get_integration(user_b) == nil
     end
+
+    test "creates a RescueTime Integration" do
+      {:ok, user} = Accounts.create_user()
+
+      assert {:ok, integration} =
+               Accounts.upsert_integration(user, %{
+                 provider: "rescuetime",
+                 credentials: %{"api_key" => "rt-secret"}
+               })
+
+      assert integration.provider == "rescuetime"
+    end
+
+    test "rejects an unknown provider" do
+      {:ok, user} = Accounts.create_user()
+
+      assert {:error, changeset} =
+               Accounts.upsert_integration(user, %{
+                 provider: "some-other-app",
+                 credentials: %{"api_key" => "x"}
+               })
+
+      assert "is invalid" in errors_on(changeset).provider
+    end
+  end
+
+  describe "delete_integration/1" do
+    test "removes an existing Integration" do
+      {:ok, user} = Accounts.create_user()
+
+      {:ok, _} =
+        Accounts.upsert_integration(user, %{
+          provider: "timing",
+          credentials: %{"api_key" => "key"}
+        })
+
+      assert {:ok, _integration} = Accounts.delete_integration(user)
+      assert Accounts.get_integration(user) == nil
+    end
+
+    test "is a no-op returning {:ok, nil} when there is none" do
+      {:ok, user} = Accounts.create_user()
+
+      assert {:ok, nil} = Accounts.delete_integration(user)
+    end
   end
 
   describe "link_identity/2" do

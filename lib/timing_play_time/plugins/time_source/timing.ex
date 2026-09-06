@@ -82,7 +82,7 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
   end
 
   defp do_get_elapsed_minutes(activities, client, opts) do
-    from = earliest_from(activities)
+    from = TimingPlayTime.Plugins.TimeSource.earliest_activation_from(activities)
     to = Keyword.get(opts, :to, DateTime.utc_now())
     today_from = Keyword.get(opts, :today_from)
     projects = Enum.map(activities, & &1.time_source_identifier)
@@ -91,13 +91,6 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
            fetch_projects_entries(client, projects, from, to, "get_elapsed_minutes") do
       {:ok, bucket_entries(entries, activities, today_from)}
     end
-  end
-
-  # The earliest of each given Activity's own default "from" (the beginning
-  # of the calendar day it was activated) — the shared cutoff this batched
-  # fetch uses instead of a distinct one per Activity (ADR-0008).
-  defp earliest_from(activities) do
-    activities |> Enum.map(&default_from(&1.activated_at)) |> earliest()
   end
 
   @impl true
@@ -403,15 +396,6 @@ defmodule TimingPlayTime.Plugins.TimeSource.Timing do
 
   defp duration_seconds(%{"duration" => duration}) when is_number(duration), do: duration
   defp duration_seconds(_), do: 0
-
-  # Cutoff for entries defaults to the beginning of the day the Activity was
-  # activated, not the exact activation instant, so an Activity created mid-day
-  # still counts time already logged earlier that same day.
-  defp default_from(nil), do: DateTime.utc_now()
-
-  defp default_from(%DateTime{} = activated_at) do
-    DateTime.new!(DateTime.to_date(activated_at), ~T[00:00:00], activated_at.time_zone)
-  end
 
   # Timing's MCP docs require dates "without microseconds" (e.g.
   # "2019-01-01T00:00:00+00:00"); DateTime.utc_now()'s default microsecond
