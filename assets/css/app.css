@@ -106,6 +106,19 @@ textarea {
   transition: all 0.2s ease;
 }
 
+/* #13: an outlier day in the weekly distribution chart is clamped to keep
+   the other six columns legible; its cut-off edge fades out so it reads as
+   "taller than shown", with the true total printed alongside it. */
+.chart-bar--clamped-up {
+  -webkit-mask-image: linear-gradient(to top, #000 55%, rgba(0, 0, 0, 0.12) 100%);
+  mask-image: linear-gradient(to top, #000 55%, rgba(0, 0, 0, 0.12) 100%);
+}
+
+.chart-bar--clamped-down {
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, rgba(0, 0, 0, 0.12) 100%);
+  mask-image: linear-gradient(to bottom, #000 55%, rgba(0, 0, 0, 0.12) 100%);
+}
+
 /* Custom gradient backgrounds */
 .bg-gradient-purple {
   background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);

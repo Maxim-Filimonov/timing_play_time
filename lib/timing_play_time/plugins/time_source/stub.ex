@@ -83,6 +83,29 @@ defmodule TimingPlayTime.Plugins.TimeSource.Stub do
     :ok
   end
 
+  @doc """
+  Test-only: forces every subsequent `list_entries/2` to return
+  `{:ok, entries_by_identifier}` verbatim, bypassing the day-rate
+  simulation, so a test can hand the dashboard a specific week — e.g. one
+  outlier day against small ones, to exercise the distribution chart's
+  clamp (#13). Pass `nil` to reset. Shares the one override slot with
+  `fail_list_entries/1`.
+  """
+  def stub_entries(nil) do
+    Application.put_env(:timing_play_time, :stub_list_entries_result, nil)
+    :ok
+  end
+
+  def stub_entries(entries_by_identifier) when is_map(entries_by_identifier) do
+    Application.put_env(
+      :timing_play_time,
+      :stub_list_entries_result,
+      {:ok, entries_by_identifier}
+    )
+
+    :ok
+  end
+
   @impl true
   def list_entries(activities, opts \\ [])
 
