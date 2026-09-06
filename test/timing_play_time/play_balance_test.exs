@@ -514,6 +514,82 @@ defmodule TimingPlayTime.PlayBalanceTest do
 
       assert [%{play_minutes: 15.0}] = by_date[~D[2026-07-24]].earn
     end
+
+    # #13: the chart anchors its pixel scale to `chart_ceiling` rather than
+    # the raw `earn_max`, so one dominant day can't crush the other six into
+    # slivers (or overflow the card).
+    test "chart_ceiling is the tallest column when no single day dwarfs the rest", %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(@now, -3, :day), minutes: 60.0},
+          %{start_date: DateTime.add(@now, -1, :day), minutes: 40.0}
+        ]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      assert dist.earn_max == 60.0
+      assert dist.chart_ceiling == 60.0
+    end
+
+    test "chart_ceiling clamps a day that dwarfs the rest to 1.5x the second-tallest column",
+         %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [
+          # one 8-hour session against a 40-minute day
+          %{start_date: DateTime.add(@now, -3, :day), minutes: 480.0},
+          %{start_date: DateTime.add(@now, -1, :day), minutes: 40.0}
+        ]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      assert dist.earn_max == 480.0
+      assert dist.chart_ceiling == 60.0
+    end
+
+    test "chart_ceiling weighs both arms when picking the second-tallest column", %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+      drainer(user, "youtube-proj-1", 1.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: DateTime.add(@now, -3, :day), minutes: 480.0}],
+        "youtube-proj-1" => [%{start_date: DateTime.add(@now, -1, :day), minutes: 40.0}]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      assert dist.chart_ceiling == 60.0
+    end
+
+    test "chart_ceiling leaves a lone spike unclamped — there are no other columns to lose",
+         %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+      earner(user, "coding-proj-1", 1.0)
+
+      raw_entries = %{
+        "coding-proj-1" => [%{start_date: DateTime.add(@now, -3, :day), minutes: 480.0}]
+      }
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], raw_entries)
+
+      assert dist.chart_ceiling == 480.0
+    end
+
+    test "chart_ceiling is 0.0 for a week with no tracked time", %{user: user} do
+      user = Map.put(user, :timezone, @tz)
+
+      assert {:ok, dist} = PlayBalance.week_distribution(user, @now, [], %{})
+
+      assert dist.chart_ceiling == 0.0
+    end
   end
 
   describe "log_spend/4 (ADR-0012's persisted write path)" do

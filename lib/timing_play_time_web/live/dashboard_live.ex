@@ -18,7 +18,14 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # closes, which is fine since nobody's looking at it then.
   @refresh_interval_ms :timer.seconds(60)
 
-  @empty_distribution %{days: [], has_drains: false, any_data: false, earn_max: 0.0, drain_max: 0.0}
+  @empty_distribution %{
+    days: [],
+    has_drains: false,
+    any_data: false,
+    earn_max: 0.0,
+    drain_max: 0.0,
+    chart_ceiling: 0.0
+  }
 
   # A no-JS +/- toggle for an Activity's Effect: two radio buttons styled as
   # pills, submitting as the `effect` form field ("positive"/"negative").
@@ -650,23 +657,25 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     Enum.filter(activities || [], &MapSet.member?(contributing, &1.id))
   end
 
-  # The chart's linear scale: `earn_max` sets px-per-minute for both arms
-  # (#16). A drains-only week has no earn arm to anchor it, so it falls back
-  # to `drain_max` — the red columns must still render (#12, story 12).
-  defp chart_scale(%{earn_max: earn_max, drain_max: drain_max}) do
-    if earn_max > 0, do: earn_max, else: drain_max
-  end
-
   # The px height one chart arm gets at full scale. The upward chart's
-  # track adds headroom below the tallest bar for the day label.
+  # track adds headroom above the tallest bar for the day label (and, on a
+  # clamped column, the true-total figure).
   @chart_arm_px 128
   defp chart_arm_px, do: @chart_arm_px
   defp chart_track_px, do: @chart_arm_px + 32
 
-  # Column arm height in px at the chart's linear scale, so a drain column
-  # is exactly as tall as its magnitude needs relative to the busiest day.
-  defp arm_px(_total, scale) when scale <= 0, do: 0.0
-  defp arm_px(total, scale), do: total / scale * @chart_arm_px
+  # Column arm height in px, anchored to `chart_ceiling` (PlayBalance, #13)
+  # rather than the raw max: a day whose total exceeds the ceiling is an
+  # outlier and renders at full height, with the HEEx fading its cut edge
+  # and printing `day.*_total` beside it so the real number is never hidden.
+  # A drains-only week still anchors here — `chart_ceiling` is computed
+  # across both arms — so the red columns still render (#12, story 12).
+  defp arm_px(_total, ceiling) when ceiling <= 0, do: 0.0
+  defp arm_px(total, ceiling), do: min(total, ceiling) / ceiling * @chart_arm_px
+
+  # Whether this column's total is dwarfing the rest of the week and has
+  # been clamped to the chart ceiling (#13).
+  defp arm_clamped?(total, ceiling), do: ceiling > 0 and total > ceiling
 
   defp day_label(date), do: Calendar.strftime(date, "%a")
 

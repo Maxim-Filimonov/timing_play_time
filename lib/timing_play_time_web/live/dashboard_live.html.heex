@@ -396,6 +396,7 @@
         class="bg-white rounded-2xl p-6 shadow-lg border-2 border-purple-200"
       >
         <h2 class="text-2xl font-bold text-gray-900 mb-6">📊 This week by day</h2>
+        <% ceiling = @week_distribution.chart_ceiling %>
 
         <div
           data-role="effect-legend"
@@ -427,10 +428,22 @@
                 :for={day <- @week_distribution.days}
                 class="flex-1 flex flex-col items-center"
               >
-                <div class="w-full flex flex-col justify-end" style={"height: #{chart_arm_px()}px"}>
+                <div
+                  class="relative w-full flex flex-col justify-end"
+                  style={"height: #{chart_arm_px()}px"}
+                >
+                  <span
+                    :if={arm_clamped?(day.earn_total, ceiling)}
+                    class="absolute inset-x-0 top-0 text-center text-[10px] font-semibold leading-none text-gray-600"
+                  >
+                    <.time_display minutes={day.earn_total} format={:short} />
+                  </span>
                   <div
-                    class="w-full flex flex-col-reverse rounded-t overflow-hidden"
-                    style={"height: #{arm_px(day.earn_total, chart_scale(@week_distribution))}px"}
+                    class={[
+                      "w-full flex flex-col-reverse rounded-t overflow-hidden",
+                      arm_clamped?(day.earn_total, ceiling) && "chart-bar--clamped-up"
+                    ]}
+                    style={"height: #{arm_px(day.earn_total, ceiling)}px"}
                   >
                     <div
                       :for={segment <- day.earn}
@@ -442,16 +455,27 @@
                   </div>
                 </div>
                 <div class="w-full border-t border-gray-300"></div>
-                <div
-                  class="w-full flex flex-col rounded-b overflow-hidden"
-                  style={"height: #{arm_px(day.drain_total, chart_scale(@week_distribution))}px"}
-                >
-                  <div
-                    :for={segment <- day.drain}
-                    class={EffectColors.segment_class(:negative, segment.band)}
-                    style={"flex: #{segment.play_minutes}"}
-                    title={"#{segment.name}: #{Float.round(segment.play_minutes, 1)}"}
+                <div class="relative w-full">
+                  <span
+                    :if={arm_clamped?(day.drain_total, ceiling)}
+                    class="absolute inset-x-0 bottom-0 text-center text-[10px] font-semibold leading-none text-gray-600"
                   >
+                    <.time_display minutes={day.drain_total} format={:short} />
+                  </span>
+                  <div
+                    class={[
+                      "w-full flex flex-col rounded-b overflow-hidden",
+                      arm_clamped?(day.drain_total, ceiling) && "chart-bar--clamped-down"
+                    ]}
+                    style={"height: #{arm_px(day.drain_total, ceiling)}px"}
+                  >
+                    <div
+                      :for={segment <- day.drain}
+                      class={EffectColors.segment_class(:negative, segment.band)}
+                      style={"flex: #{segment.play_minutes}"}
+                      title={"#{segment.name}: #{Float.round(segment.play_minutes, 1)}"}
+                    >
+                    </div>
                   </div>
                 </div>
                 <span class="mt-1 text-xs text-gray-500">{day_label(day.date)}</span>
@@ -464,9 +488,18 @@
               :for={day <- @week_distribution.days}
               class="flex-1 flex flex-col items-center justify-end h-full"
             >
+              <span
+                :if={arm_clamped?(day.earn_total, ceiling)}
+                class="text-[10px] font-semibold leading-none text-gray-600 mb-0.5"
+              >
+                <.time_display minutes={day.earn_total} format={:short} />
+              </span>
               <div
-                class="w-full flex flex-col-reverse rounded-t overflow-hidden"
-                style={"height: #{arm_px(day.earn_total, chart_scale(@week_distribution))}px"}
+                class={[
+                  "w-full flex flex-col-reverse rounded-t overflow-hidden",
+                  arm_clamped?(day.earn_total, ceiling) && "chart-bar--clamped-up"
+                ]}
+                style={"height: #{arm_px(day.earn_total, ceiling)}px"}
               >
                 <div
                   :for={segment <- day.earn}

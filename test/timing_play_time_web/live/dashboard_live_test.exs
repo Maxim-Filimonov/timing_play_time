@@ -271,6 +271,150 @@ defmodule TimingPlayTimeWeb.DashboardLiveTest do
     end
   end
 
+  describe "weekly distribution chart — outlier day (#13)" do
+    setup do
+      on_exit(fn -> TimeSourceStub.stub_entries(nil) end)
+      :ok
+    end
+
+    # Heights (px) of every earn column, oldest -> newest.
+    defp earn_bar_heights(html) do
+      ~r/flex-col-reverse rounded-t overflow-hidden[^"]*"\s+style="height:\s*([\d.]+)px"/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.map(fn [h] -> String.to_float(h) end)
+    end
+
+    defp drain_bar_heights(html) do
+      ~r/flex flex-col rounded-b overflow-hidden[^"]*"\s+style="height:\s*([\d.]+)px"/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.map(fn [h] -> String.to_float(h) end)
+    end
+
+    defp count_substring(haystack, needle),
+      do: length(String.split(haystack, needle)) - 1
+
+    test "a dominant earn day is clamped and labelled with its true total, and the other days stay legible",
+         %{conn: conn, user: user} do
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -30, :day)
+        })
+
+      now = DateTime.utc_now()
+
+      TimeSourceStub.stub_entries(%{
+        "coding-proj-1" => [
+          # one 8-hour session, then two ordinary days
+          %{start_date: DateTime.add(now, -3, :day), minutes: 480.0, time_entry_id: "big"},
+          %{start_date: DateTime.add(now, -2, :day), minutes: 40.0, time_entry_id: "small-a"},
+          %{start_date: DateTime.add(now, -1, :day), minutes: 30.0, time_entry_id: "small-b"}
+        ]
+      })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ ~s(data-chart="upward")
+
+      # Exactly the one outlier column is rendered ragged/faded.
+      assert count_substring(html, "chart-bar--clamped-up") == 1
+
+      # Its true total is printed alongside it (480 min -> "8.0 hr").
+      assert [_, window] =
+               Regex.run(
+                 ~r/text-\[10px\] font-semibold leading-none text-gray-600(.{0,200})/s,
+                 html
+               )
+
+      assert window =~ "8.0"
+      assert window =~ "hr"
+
+      heights = earn_bar_heights(html)
+
+      # Nothing overflows the arm...
+      assert Enum.all?(heights, &(&1 <= 128.0 + 0.001))
+      # ...one column is pinned to the ceiling (the clamped outlier)...
+      assert Enum.any?(heights, &(&1 >= 128.0 - 0.001))
+      # ...and the two ordinary days render as real bars, not slivers.
+      # (ceiling = 1.5 x 40 = 60, so 40 -> ~85px and 30 -> 64px; without the
+      # clamp they'd be 40/480 and 30/480 of the arm — ~11px and ~8px.)
+      assert Enum.count(heights, &(&1 > 50.0 and &1 < 128.0)) == 2
+    end
+
+    test "a dominant drain day is clamped downward instead of overflowing the card", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -30, :day)
+        })
+
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "YouTube",
+          time_source_identifier: "youtube-proj-1",
+          multiplier: 1.0,
+          effect: :negative,
+          activated_at: DateTime.add(DateTime.utc_now(), -30, :day)
+        })
+
+      now = DateTime.utc_now()
+
+      TimeSourceStub.stub_entries(%{
+        "coding-proj-1" => [
+          %{start_date: DateTime.add(now, -3, :day), minutes: 40.0, time_entry_id: "e1"},
+          %{start_date: DateTime.add(now, -2, :day), minutes: 40.0, time_entry_id: "e2"}
+        ],
+        "youtube-proj-1" => [
+          %{start_date: DateTime.add(now, -1, :day), minutes: 480.0, time_entry_id: "d1"}
+        ]
+      })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      assert html =~ ~s(data-chart="diverging")
+      assert count_substring(html, "chart-bar--clamped-down") == 1
+
+      assert Enum.all?(drain_bar_heights(html), &(&1 <= 128.0 + 0.001))
+    end
+
+    test "a flat week draws no clamped column", %{conn: conn, user: user} do
+      {:ok, _} =
+        PersistenceStub.create_activity(user.id, %{
+          name: "Coding",
+          time_source_identifier: "coding-proj-1",
+          multiplier: 1.0,
+          effect: :positive,
+          activated_at: DateTime.add(DateTime.utc_now(), -30, :day)
+        })
+
+      now = DateTime.utc_now()
+
+      TimeSourceStub.stub_entries(%{
+        "coding-proj-1" =>
+          for offset <- 1..5 do
+            %{
+              start_date: DateTime.add(now, -offset, :day),
+              minutes: 45.0,
+              time_entry_id: "e#{offset}"
+            }
+          end
+      })
+
+      {:ok, _view, html} = live(conn, ~p"/")
+
+      refute html =~ "chart-bar--clamped"
+    end
+  end
+
   test "does not show another user's Activities", %{conn: conn, user: user} do
     {:ok, other_user} = Accounts.create_user()
 

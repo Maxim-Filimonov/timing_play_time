@@ -202,13 +202,17 @@ defmodule TimingPlayTime.PlayBalance do
       week's minutes, so the chart's form is stable per User (#12 Q1).
     * `any_data` is whether any tracked minutes at all landed in the 7-day
       window — the LiveView hides the whole card when it's false (#12 Q5).
-    * `earn_max` / `drain_max` set the chart's linear scale.
+    * `earn_max` / `drain_max` are the raw tallest earn / drain columns.
+    * `chart_ceiling` is what the LiveView actually anchors its pixel scale
+      to (#13): the tallest column across both arms, but clamped to 1.5x the
+      second-tallest when one day dwarfs the rest, so an outlier day can't
+      crush the other six into slivers or overflow the card.
 
   ## Examples
 
       iex> PlayBalance.week_distribution(user, ~U[2026-07-25 10:00:00Z])
       {:ok, %{days: [_ | _], has_drains: false, any_data: true,
-              earn_max: 60.0, drain_max: 0.0}}
+              earn_max: 60.0, drain_max: 0.0, chart_ceiling: 60.0}}
   """
   @spec week_distribution(map(), DateTime.t(), keyword(), map() | nil) ::
           {:ok,
@@ -217,7 +221,8 @@ defmodule TimingPlayTime.PlayBalance do
              has_drains: boolean(),
              any_data: boolean(),
              earn_max: float(),
-             drain_max: float()
+             drain_max: float(),
+             chart_ceiling: float()
            }}
           | {:error, term()}
   def week_distribution(
@@ -250,7 +255,8 @@ defmodule TimingPlayTime.PlayBalance do
          has_drains: Enum.any?(activities, &(&1.effect == :negative)),
          any_data: Enum.any?(days, &(&1.earn != [] or &1.drain != [])),
          earn_max: days |> Enum.map(& &1.earn_total) |> Enum.max(),
-         drain_max: days |> Enum.map(& &1.drain_total) |> Enum.max()
+         drain_max: days |> Enum.map(& &1.drain_total) |> Enum.max(),
+         chart_ceiling: chart_ceiling(days)
        }}
     end
   end
@@ -539,6 +545,29 @@ defmodule TimingPlayTime.PlayBalance do
   defp window_dates(timezone, now) do
     today = LocalDay.to_date(timezone, now)
     Enum.map(6..0//-1, &Date.add(today, -&1))
+  end
+
+  # The minute value that maps to a full-height chart arm (#13). Normally
+  # the tallest column across both arms, but when one day dwarfs the rest —
+  # e.g. a single 8-hour session against 40-minute days — it's clamped to
+  # `@outlier_clamp_ratio` times the second-tallest column, so the other six
+  # days stay legible and the outlier's arm can't overflow the card. The
+  # LiveView renders the clamped column ragged and prints its true total, so
+  # the real number is never hidden. A lone spike (nothing else tracked that
+  # week) has no columns to protect, so it's left at full height.
+  @outlier_clamp_ratio 1.5
+  defp chart_ceiling(days) do
+    totals =
+      for day <- days,
+          total <- [day.earn_total, day.drain_total],
+          total > 0.0,
+          do: total
+
+    case Enum.sort(totals, :desc) do
+      [] -> 0.0
+      [only] -> only
+      [highest, second | _] -> min(highest, second * @outlier_clamp_ratio)
+    end
   end
 
   defp dist_day(date, entries, activities_by_id) do
