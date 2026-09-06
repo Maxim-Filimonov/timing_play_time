@@ -32,9 +32,9 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
   alias TimingPlayTime.Accounts
   alias TimingPlayTime.EntryLedger
   alias TimingPlayTime.PlaytimeUsed
+  alias TimingPlayTime.Plugins.TimeSource
 
   @persistence Application.compile_env!(:timing_play_time, :persistence_adapter)
-  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
   # Mirrors the `@session_options` in lib/timing_play_time_web/endpoint.ex —
   # keep these two salts in sync if that ever changes.
@@ -50,7 +50,7 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
 
     user = fetch_user!(opts)
     dry_run? = !!opts[:dry_run]
-    time_source_opts = connect_time_source(user)
+    {module, time_source_opts} = connect_time_source(user)
 
     with {:ok, activities} <- @persistence.list_activities(user.id),
          {:ok, usages} <- PlaytimeUsed.list_all(user.id),
@@ -64,7 +64,8 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
         """)
       end
 
-      raw_entries = EntryLedger.load(activities, DateTime.utc_now(), time_source_opts)
+      raw_entries =
+        EntryLedger.load(activities, DateTime.utc_now(), time_source_opts, &module.list_entries/2)
       ledger_entries = EntryLedger.build_entries(activities, raw_entries)
 
       %{entries: replayed} = EntryLedger.replay(ledger_entries, usages, user.timezone)
@@ -147,18 +148,21 @@ defmodule Mix.Tasks.Balance.BackfillConsumption do
   end
 
   defp connect_time_source(user) do
-    case Accounts.get_integration(user) do
+    integration = Accounts.get_integration(user)
+    module = TimeSource.for(integration)
+
+    case integration do
       nil ->
-        []
+        {module, []}
 
       integration ->
-        case @time_source.connect(integration.credentials) do
+        case module.connect(integration.credentials) do
           {:ok, client} ->
-            [client: client]
+            {module, [client: client]}
 
           {:error, reason} ->
-            Mix.shell().info("(no Timing connection: #{inspect(reason)} — entries will be empty)")
-            []
+            Mix.shell().info("(no connection: #{inspect(reason)} — entries will be empty)")
+            {module, []}
         end
     end
   end

@@ -8,10 +8,9 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   alias TimingPlayTime.ManualSync
   alias TimingPlayTime.Accounts
   alias TimingPlayTime.LocalDay
+  alias TimingPlayTime.Plugins.TimeSource
   alias TimingPlayTimeWeb.EffectColors
   alias TimingPlayTimeWeb.SourcePickerComponent
-
-  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
 
   # Keeps the dashboard live-updating while the tab is open, without a
   # background job queue (ADR-0007) — data goes stale again once the tab
@@ -76,6 +75,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
       socket
       |> assign(:page_title, "Dashboard")
       |> assign(:client, nil)
+      |> assign(:time_source_module, nil)
       |> assign(:balance, nil)
       |> assign(:today, nil)
       |> assign(:show_debug, false)
@@ -123,8 +123,10 @@ defmodule TimingPlayTimeWeb.DashboardLive do
         assign(socket, :source_list, :no_integration)
 
       client ->
+        module = socket.assigns.time_source_module
+
         start_async(socket, :load_sources, fn ->
-          @time_source.list_sources(client: client)
+          module.list_sources(client: client)
         end)
     end
   end
@@ -501,12 +503,15 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   # external call), and only if the user has a configured Integration.
   defp open_time_source_connection(socket) do
     if connected?(socket) do
-      case Accounts.get_integration(socket.assigns.current_user) do
+      integration = Accounts.get_integration(socket.assigns.current_user)
+      socket = assign(socket, :time_source_module, TimeSource.for(integration))
+
+      case integration do
         nil ->
           socket
 
         integration ->
-          case @time_source.connect(integration.credentials) do
+          case socket.assigns.time_source_module.connect(integration.credentials) do
             {:ok, client} -> assign(socket, :client, client)
             {:error, _reason} -> socket
           end
@@ -740,6 +745,7 @@ defmodule TimingPlayTimeWeb.DashboardLive do
   defp fetch_activities_and_entries(socket) do
     user = socket.assigns.current_user
     time_source_opts = client_opts(socket)
+    module = socket.assigns.time_source_module
     now = DateTime.utc_now()
 
     activities =
@@ -751,14 +757,20 @@ defmodule TimingPlayTimeWeb.DashboardLive do
     today_from = today_from(user, now)
 
     totals =
-      PlayBalance.get_totals(activities, [to: now, today_from: today_from] ++ time_source_opts)
+      PlayBalance.get_totals(
+        activities,
+        [to: now, today_from: today_from] ++ time_source_opts,
+        &module.get_elapsed_minutes/2
+      )
 
     # Bounded to the Entry Expiry Window (ADR-0012) — unlike `totals` above
     # (the debug-only, deliberately unbounded Play Balance/per-Activity
     # cumulative figures, ADR-0008), nothing older than the window is ever
     # displayed or spendable any more, so there's no reason to fetch it.
     window_start = PlayBalance.expiry_window_start(now)
-    entries_result = EntryLedger.fetch(activities, now, [from: window_start] ++ time_source_opts)
+
+    entries_result =
+      EntryLedger.fetch(activities, now, [from: window_start] ++ time_source_opts, &module.list_entries/2)
 
     {activities, totals, entries_result}
   end

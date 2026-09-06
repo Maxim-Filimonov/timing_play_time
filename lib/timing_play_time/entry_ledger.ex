@@ -68,8 +68,6 @@ defmodule TimingPlayTime.EntryLedger do
 
   alias TimingPlayTime.LocalDay
 
-  @time_source Application.compile_env!(:timing_play_time, :time_source_adapter)
-
   @type entry :: %{
           required(:activity_id) => term(),
           required(:time_entry_id) => term(),
@@ -121,7 +119,7 @@ defmodule TimingPlayTime.EntryLedger do
         activities,
         now \\ DateTime.utc_now(),
         time_source_opts \\ [],
-        list_entries \\ &@time_source.list_entries/2
+        list_entries \\ &TimingPlayTime.Plugins.TimeSource.Stub.list_entries/2
       ) do
     case fetch(activities, now, time_source_opts, list_entries) do
       {:ok, entries} -> entries
@@ -147,7 +145,7 @@ defmodule TimingPlayTime.EntryLedger do
         activities,
         now \\ DateTime.utc_now(),
         time_source_opts \\ [],
-        list_entries \\ &@time_source.list_entries/2
+        list_entries \\ &TimingPlayTime.Plugins.TimeSource.Stub.list_entries/2
       ) do
     list_entries.(activities, [to: now] ++ time_source_opts)
   end

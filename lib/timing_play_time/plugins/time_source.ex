@@ -160,4 +160,59 @@ defmodule TimingPlayTime.Plugins.TimeSource do
   """
   @callback list_sources(opts :: keyword()) ::
               {:ok, [source]} | {:error, :not_connected} | {:error, term()}
+
+  @doc """
+  Resolves the adapter module that answers for `integration.provider`
+  (ADR-0016) — runtime, per-User dispatch, replacing what used to be a
+  single compile-time `@time_source` shared by every User in the running
+  app.
+
+  `:time_source_adapter_override` (test-only, set in `config/test.exs`)
+  short-circuits to the Stub regardless of `provider` — this is the only
+  thing that differs between environments; this function itself has no
+  `Mix.env()` branching.
+
+  A User with no Integration yet (`nil`) still needs *some* module to call
+  — with no `:client` in opts, every real adapter's `get_elapsed_minutes/2`/
+  `list_entries/2` answers `{:error, :not_connected}` regardless of which
+  one is picked, so this falls back to `Timing` (honoring the same
+  test-only override) rather than making every caller special-case `nil`
+  itself.
+  """
+  @spec for(TimingPlayTime.Accounts.Integration.t() | nil) :: module()
+  def for(nil) do
+    Application.get_env(:timing_play_time, :time_source_adapter_override) ||
+      TimingPlayTime.Plugins.TimeSource.Timing
+  end
+
+  def for(%TimingPlayTime.Accounts.Integration{provider: provider}) do
+    Application.get_env(:timing_play_time, :time_source_adapter_override) ||
+      Map.fetch!(providers(), provider)
+  end
+
+  defp providers do
+    %{
+      "timing" => TimingPlayTime.Plugins.TimeSource.Timing,
+      "rescuetime" => TimingPlayTime.Plugins.TimeSource.RescueTime
+    }
+  end
+
+  @doc """
+  The shared earliest-activation cutoff (ADR-0008): the earliest, across
+  every given Activity, of the beginning of the calendar day it was
+  activated — one cutoff for the whole batched `get_elapsed_minutes/2` call,
+  not a separate one per Activity. Shared by every adapter that owns its own
+  `:from` for that callback (Timing, RescueTime) so the rule can't drift
+  between them.
+  """
+  @spec earliest_activation_from([map()]) :: DateTime.t()
+  def earliest_activation_from(activities) do
+    activities |> Enum.map(&activation_day_start/1) |> Enum.min(DateTime)
+  end
+
+  defp activation_day_start(%{activated_at: nil}), do: DateTime.utc_now()
+
+  defp activation_day_start(%{activated_at: %DateTime{} = activated_at}) do
+    DateTime.new!(DateTime.to_date(activated_at), ~T[00:00:00], activated_at.time_zone)
+  end
 end
